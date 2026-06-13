@@ -1,16 +1,18 @@
 {
-  "name": "widget-sample",
-  "author": "Vanessa",
-  "url": "https://github.com/siyuan-note/widget-sample",
-  "version": "0.0.3",
-  "minAppVersion": "2.8.8",
+  "name": "siyuan-canvas-widget",
+  "author": "Canvas Team",
+  "url": "",
+  "version": "1.0.0",
+  "minAppVersion": "3.0.0",
+  "backends": ["windows", "linux", "darwin", "docker", "ios", "android"],
+  "frontends": ["desktop", "mobile"],
   "displayName": {
-    "default": "Widget Sample",
-    "zh_CN": "挂件示例"
+    "zh_CN": "Canvas 白板",
+    "en_US": "Canvas Whiteboard"
   },
   "description": {
-    "default": "This is a widget sample",
-    "zh_CN": "这是一个挂件示例"
+    "zh_CN": "Obsidian Canvas 风格的无限画布白板，支持卡片、连接线等功能",
+    "en_US": "Obsidian Canvas-style infinite whiteboard with cards, connections, and note embedding"
   },
   "readme": {
     "default": "README.md",
@@ -19,12 +21,9 @@
   "funding": {
     "openCollective": "",
     "patreon": "",
-    "github": "",
-    "custom": [
-      "https://ld246.com/sponsor"
-    ]
+    "github": ""
   },
   "keywords": [
-    "sample", "示例"
+    "sample", "白板", "canvas", "card", "connection", "note embedding"
   ]
 }

@@ -1,0 +1,1162 @@
+/* ============================================
+   Canvas 白板样式 - Obsidian Canvas 风格
+   参考: https://github.com/obsidianmd/jsoncanvas
+   ============================================ */
+
+/* CSS 变量定义 */
+:root {
+    /* 画布变换变量 */
+    --canvas-scale: 1;
+    --canvas-pan-x: 0px;
+    --canvas-pan-y: 0px;
+
+    /* 颜色变量 - 亮色主题 */
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f5f5f5;
+    --color-bg-card: #ffffff;
+    --color-text-primary: #333333;
+    --color-text-secondary: #666666;
+    --color-border: #333333;
+    --color-border-light: #e0e0e0;
+    --color-grid: #d0d0d0;
+    --color-accent: #4dabf7;
+    --color-accent-hover: #228be6;
+    --color-selection: rgba(77, 171, 247, 0.3);
+    --color-shadow: rgba(0, 0, 0, 0.15);
+    --color-shadow-heavy: rgba(0, 0, 0, 0.3);
+}
+
+/* 暗色主题 */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-bg-primary: #1e1e1e;
+        --color-bg-secondary: #2a2a2a;
+        --color-bg-card: #2a2a2a;
+        --color-text-primary: #e0e0e0;
+        --color-text-secondary: #aaaaaa;
+        --color-border: #555555;
+        --color-border-light: #444444;
+        --color-grid: #444444;
+        --color-shadow: rgba(0, 0, 0, 0.4);
+        --color-shadow-heavy: rgba(0, 0, 0, 0.6);
+    }
+}
+
+/* 全局重置 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    touch-action: manipulation; /* 防止双击缩放 */
+}
+
+/* ============================================
+   画布容器
+   ============================================ */
+#canvas-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: default;
+    /* 网格背景 - 参考 JSON Canvas 实现，随缩放自适应 */
+    background-color: var(--color-bg-secondary);
+    background-image: radial-gradient(
+        circle,
+        var(--color-grid) calc(var(--canvas-scale) * 0.5px + 0.5px),
+        transparent 0
+    );
+    background-size: calc(var(--canvas-scale) * 20px) calc(var(--canvas-scale) * 20px);
+    background-position: calc(var(--canvas-pan-x) - 19px) calc(var(--canvas-pan-y) - 19px);
+}
+
+#canvas-container.panning {
+    cursor: grabbing;
+}
+
+/* Space 键按下时的平移准备状态 */
+#canvas-container.will-pan {
+    cursor: grab;
+}
+
+#canvas-container.will-pan.panning {
+    cursor: grabbing;
+}
+
+/* 无限画布 - 使用 CSS 变量 */
+#canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform-origin: 0 0;
+    transform: translate(var(--canvas-pan-x), var(--canvas-pan-y)) scale(var(--canvas-scale));
+    will-change: transform; /* 性能优化 */
+    /* 修复 GPU 合成层导致的 SVG 线条变细 + 边框锯齿 */
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+/* 节点层 */
+#nodes-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* 边层（SVG） */
+#edges-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    overflow: visible; /* SVG 默认 overflow:hidden，会裁剪超出视口的连线 */
+}
+
+#edges-layer path {
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+/* 临时边层（拖拽时显示） */
+#temp-edge-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1000;
+    overflow: visible;
+}
+
+/* ============================================
+   卡片样式 — Obsidian Canvas 风格
+   ============================================ */
+.card {
+    position: absolute;
+    min-width: 50px;
+    min-height: 50px;
+    background: var(--color-bg-card);
+    border: 2px solid var(--color-border);
+    border-radius: 8px;
+    cursor: default;
+    z-index: 1;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: box-shadow 0.2s, border-color 0.2s;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+}
+
+.card:hover {
+    box-shadow: 0 4px 12px var(--color-shadow);
+}
+
+.card.selected {
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 0 3px var(--color-selection);
+}
+
+.card.editing {
+    cursor: text;
+}
+
+.card.is-dragging {
+    cursor: grabbing;
+    box-shadow: 0 5px 15px var(--color-shadow-heavy);
+    z-index: 1000;
+}
+
+/* 卡片内容区 */
+.card-content {
+    flex: 1;
+    padding: 12px;
+    overflow: auto;
+    word-wrap: break-word;
+    color: var(--color-text-primary);
+    line-height: 1.5;
+    border-radius: 0 0 6px 6px;
+}
+
+/* Markdown 内容样式 */
+.card-content h1,
+.card-content h2,
+.card-content h3,
+.card-content h4 {
+    margin-top: 0.5em;
+    margin-bottom: 0.3em;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.card-content h1 { font-size: 1.4em; }
+.card-content h2 { font-size: 1.25em; }
+.card-content h3 { font-size: 1.1em; }
+.card-content h4 { font-size: 1em; }
+
+.card-content p {
+    margin: 0.4em 0;
+}
+
+.card-content ul,
+.card-content ol {
+    margin: 0.4em 0;
+    padding-left: 1.5em;
+}
+
+.card-content li {
+    margin: 0.2em 0;
+}
+
+.card-content code {
+    background: var(--color-bg-secondary);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.card-content pre {
+    background: var(--color-bg-secondary);
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0.5em 0;
+}
+
+.card-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 0.85em;
+}
+
+.card-content blockquote {
+    border-left: 3px solid var(--color-accent);
+    padding-left: 12px;
+    margin: 0.5em 0;
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.card-content a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    word-break: break-all;
+}
+
+.card-content a:hover {
+    color: var(--color-accent-hover);
+}
+
+.card-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 0.5em 0;
+}
+
+.card-content hr {
+    border: none;
+    border-top: 1px solid var(--color-border-light);
+    margin: 0.8em 0;
+}
+
+.card-content strong {
+    font-weight: 600;
+}
+
+.card-content em {
+    font-style: italic;
+}
+
+.card-content del {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+/* 编辑模式 */
+.card-content[contenteditable="true"] {
+    cursor: text;
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+    white-space: pre-wrap;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    background: var(--color-bg-secondary);
+    padding: 12px;
+    border-radius: inherit;
+}
+
+/* 卡片颜色预设 */
+.card[data-color="red"] { background: #ff6b6b; border-color: #c92a2a; }
+.card[data-color="orange"] { background: #ffa94d; border-color: #d9480f; }
+.card[data-color="yellow"] { background: #ffd43b; border-color: #f59f00; }
+.card[data-color="green"] { background: #69db7c; border-color: #2f9e44; }
+.card[data-color="blue"] { background: #4dabf7; border-color: #1864ab; }
+.card[data-color="purple"] { background: #9775fa; border-color: #6741d9; }
+.card[data-color="gray"] { background: #868e96; border-color: #495057; }
+.card[data-color="white"] { background: #ffffff; border-color: #333333; }
+
+/* 卡片形状 */
+.card[data-shape="rect"] { border-radius: 0; }
+.card[data-shape="rounded"] { border-radius: 8px; }
+.card[data-shape="diamond"] {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}
+.card[data-shape="ellipse"] { border-radius: 50%; }
+
+/* 卡片边框 */
+.card[data-border="solid"] { border-style: solid; }
+.card[data-border="dashed"] { border-style: dashed; }
+.card[data-border="none"] { border-style: none; }
+
+/* 文本对齐 */
+.card[data-align="left"] .card-content { text-align: left; }
+.card[data-align="center"] .card-content { text-align: center; }
+.card[data-align="right"] .card-content { text-align: right; }
+
+/* ============================================
+   锚点（连接点）— 大圆点，居中于卡片边缘
+   ============================================ */
+.card-anchor {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    background: var(--color-accent);
+    border: 2px solid var(--color-bg-primary);
+    border-radius: 50%;
+    cursor: crosshair;
+    opacity: 0;
+    transition: opacity 0.15s, transform 0.15s;
+    z-index: 10;
+    pointer-events: auto;
+}
+
+/* 由 JS 按鼠标所在侧单独控制显示 */
+.card-anchor.visible {
+    opacity: 1;
+}
+
+.card-anchor:hover {
+    transform: scale(1.25);
+    background: var(--color-accent-hover);
+}
+
+/* 锚点位置 — 圆心压在卡片边框上 */
+.card-anchor.top {
+    top: -8px;
+    left: 50%;
+    margin-left: -8px;
+}
+
+.card-anchor.bottom {
+    bottom: -8px;
+    left: 50%;
+    margin-left: -8px;
+}
+
+.card-anchor.left {
+    left: -8px;
+    top: 50%;
+    margin-top: -8px;
+}
+
+.card-anchor.right {
+    right: -8px;
+    top: 50%;
+    margin-top: -8px;
+}
+
+/* ============================================
+   调整大小手柄 — 四角（圆形）
+   仅变换光标，不显示高亮
+   ============================================ */
+.card-resize-handle {
+    position: absolute;
+    background: transparent;
+    border: none;
+    opacity: 1;
+    z-index: 11;
+    pointer-events: auto;
+}
+
+/* 四角位置 */
+.card-resize-nw {
+    top: -6px;
+    left: -6px;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+
+.card-resize-ne {
+    top: -6px;
+    right: -6px;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+
+.card-resize-sw {
+    bottom: -6px;
+    left: -6px;
+    width: 12px;
+    height: 12px;
+    cursor: nesw-resize;
+}
+
+.card-resize-se {
+    bottom: -6px;
+    right: -6px;
+    width: 12px;
+    height: 12px;
+    cursor: nwse-resize;
+}
+
+/* 调整大小手柄 — 四条边（条形） */
+.card-resize-edge {
+    position: absolute;
+    opacity: 1;
+    z-index: 9;
+    pointer-events: auto;
+    border: none;
+    background: transparent;
+}
+
+/* 上边 */
+.card-resize-edge-top {
+    top: -3px;
+    left: 24px;
+    right: 24px;
+    height: 6px;
+    cursor: ns-resize;
+}
+
+/* 下边 */
+.card-resize-edge-bottom {
+    bottom: -3px;
+    left: 24px;
+    right: 24px;
+    height: 6px;
+    cursor: ns-resize;
+}
+
+/* 左边 */
+.card-resize-edge-left {
+    left: -3px;
+    top: 24px;
+    bottom: 24px;
+    width: 6px;
+    cursor: ew-resize;
+}
+
+/* 右边 */
+.card-resize-edge-right {
+    right: -3px;
+    top: 24px;
+    bottom: 24px;
+    width: 6px;
+    cursor: ew-resize;
+}
+
+.card.resizing {
+    user-select: none;
+}
+
+/* ============================================
+   连接线样式
+   ============================================ */
+.edge-group {
+    pointer-events: none;
+}
+
+.edge-path {
+    fill: none;
+    stroke: var(--color-border);
+    stroke-width: 2.5;
+    cursor: pointer;
+    pointer-events: stroke;
+    transition: stroke 0.2s, stroke-width 0.2s;
+    /* 增强 GPU 渲染下的线条质量 */
+    shape-rendering: geometricPrecision;
+    vector-effect: non-scaling-stroke;
+}
+
+.edge-hit-path {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 16;
+    cursor: pointer;
+    pointer-events: stroke;
+}
+
+.edge-path:hover {
+    stroke: var(--color-accent);
+    stroke-width: 4.5;
+}
+
+.edge-path.selected {
+    stroke: var(--color-accent);
+    stroke-width: 3.5;
+}
+
+/* 边端点拖拽重连状态 */
+.edge-group.edge-dragging .edge-path {
+    stroke: var(--color-accent);
+    stroke-width: 3.5;
+    filter: drop-shadow(0 0 4px rgba(77, 171, 247, 0.4));
+}
+
+.edge-arrow {
+    fill: var(--color-border);
+}
+
+.temp-edge {
+    fill: none;
+    stroke: var(--color-accent);
+    stroke-width: 2.5;
+    opacity: 0.9;
+    pointer-events: none;
+    shape-rendering: geometricPrecision;
+    vector-effect: non-scaling-stroke;
+}
+
+/* ============================================
+   工具栏
+   ============================================ */
+.toolbar {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    background: var(--color-bg-primary);
+    padding: 8px 16px;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px var(--color-shadow);
+    z-index: 10000;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.toolbar-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 14px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+    color: var(--color-text-primary);
+}
+
+.toolbar-btn:hover {
+    background: var(--color-bg-secondary);
+}
+
+.toolbar-btn:active {
+    background: var(--color-border-light);
+}
+
+/* 工具栏 - 卡片缩略图标 */
+.toolbar-icon-card {
+    display: block;
+    width: 28px;
+    height: 18px;
+    background: var(--color-bg-card);
+    border: 1.5px solid var(--color-border);
+    border-radius: 3px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.toolbar-btn:hover .toolbar-icon-card {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-selection);
+}
+
+/* 工具栏 - 组缩略图标 */
+.toolbar-icon-group {
+    display: block;
+    width: 32px;
+    height: 24px;
+    background: rgba(77, 171, 247, 0.08);
+    border: 1.5px dashed var(--color-accent);
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.toolbar-btn:hover .toolbar-icon-group {
+    background: rgba(77, 171, 247, 0.18);
+}
+
+/* 工具栏 - 拖拽时隐藏源图标 */
+.toolbar-btn.dragging-source .toolbar-icon-card,
+.toolbar-btn.dragging-source .toolbar-icon-group {
+    opacity: 0.3;
+}
+
+/* ============================================
+   右键菜单
+   ============================================ */
+.context-menu {
+    position: fixed;
+    background: var(--color-bg-primary);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px var(--color-shadow-heavy);
+    min-width: 160px;
+    padding: 4px 0;
+    z-index: 10001;
+    user-select: none;
+    -webkit-user-select: none;
+    border: 1px solid var(--color-border-light);
+}
+
+.context-menu-item {
+    padding: 5px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
+.menu-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    color: var(--color-accent);
+}
+
+.context-menu-item:hover {
+    background: var(--color-bg-secondary);
+}
+
+.context-menu-item.danger {
+    color: #e03131;
+}
+
+.context-menu-item.danger:hover {
+    background: #ffe3e3;
+}
+
+.context-menu-item.disabled {
+    color: var(--color-text-secondary);
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+    .context-menu-item.danger:hover {
+        background: #3d2a2a;
+    }
+}
+
+/* 只读模式 — 仅改变光标，由 JS 拦截操作 */
+#canvas-container.read-only {
+    cursor: default;
+}
+
+#canvas-container.read-only .card {
+    cursor: default;
+}
+
+.context-menu-divider {
+    height: 1px;
+    background: var(--color-border-light);
+    margin: 3px 8px;
+}
+
+/* ============================================
+   模态框
+   ============================================ */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10002;
+}
+
+.modal-content {
+    background: var(--color-bg-primary);
+    border-radius: 12px;
+    padding: 24px;
+    min-width: 300px;
+    max-width: 500px;
+    box-shadow: 0 8px 32px var(--color-shadow-heavy);
+    color: var(--color-text-primary);
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--color-text-primary);
+}
+
+.modal-body {
+    margin-bottom: 20px;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.modal-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.2s;
+}
+
+.modal-btn-primary {
+    background: var(--color-accent);
+    color: white;
+}
+
+.modal-btn-primary:hover {
+    background: var(--color-accent-hover);
+}
+
+.modal-btn-secondary {
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+
+.modal-btn-secondary:hover {
+    background: var(--color-border-light);
+}
+
+/* ============================================
+   颜色选择器
+   ============================================ */
+.color-picker {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 8px;
+}
+
+.color-swatch {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    border: 2px solid #e0e0e0;
+    cursor: pointer;
+    transition: transform 0.2s, border-color 0.2s;
+}
+
+.color-swatch:hover {
+    transform: scale(1.1);
+    border-color: #4dabf7;
+}
+
+.color-swatch.active {
+    border-color: var(--color-accent);
+    border-width: 3px;
+}
+
+/* ============================================
+   笔记卡片（嵌入 SiYuan 块）
+   ============================================ */
+.card.note-card {
+    background: var(--color-bg-card);
+}
+
+.card.note-card .card-content {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.card.note-card .card-header {
+    padding: 8px 12px;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.card.note-card .card-header::before {
+    content: '📄';
+    font-size: 14px;
+}
+
+.card.note-card iframe {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0 0 6px 6px;
+}
+
+/* ============================================
+   媒体卡片
+   ============================================ */
+.card.media-card {
+    background: var(--color-bg-card);
+}
+
+.card.media-card .card-content {
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.card.media-card img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.card.media-card video,
+.card.media-card audio {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.card.media-card .media-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--color-text-secondary);
+    padding: 20px;
+    text-align: center;
+}
+
+.card.media-card .media-placeholder .icon {
+    font-size: 48px;
+    opacity: 0.5;
+}
+
+/* ============================================
+   组卡片（容器节点）
+   ============================================ */
+.card.group-card {
+    background: rgba(77, 171, 247, 0.05);
+    border: 2px dashed var(--color-accent);
+    border-radius: 12px;
+    z-index: 0 !important;
+}
+
+.card.group-card .card-header {
+    padding: 8px 12px;
+    background: rgba(77, 171, 247, 0.1);
+    border-bottom: 1px solid var(--color-accent);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: text;
+    user-select: text;
+}
+
+.card.group-card .card-header::before {
+    content: '📦';
+    font-size: 14px;
+}
+
+.card.group-card .card-content {
+    padding: 16px;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+
+/* ============================================
+   链接卡片
+   ============================================ */
+.card.link-card {
+    background: var(--color-bg-card);
+}
+
+.card.link-card .card-header {
+    padding: 8px 12px;
+    background: rgba(77, 171, 247, 0.1);
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.card.link-card .card-content {
+    padding: 12px;
+}
+
+.card.link-card .card-content a:hover {
+    text-decoration: underline;
+}
+
+/* ============================================
+   框选区域
+   ============================================ */
+.marquee {
+    position: absolute;
+    border: 2px dashed var(--color-accent);
+    background: var(--color-selection);
+    pointer-events: auto;
+    z-index: 1000;
+    box-sizing: border-box;
+}
+
+.marquee.persistent {
+    border: 3px solid var(--color-accent);
+    background: rgba(77, 171, 247, 0.15);
+    pointer-events: auto;
+    cursor: default;
+    box-shadow: 0 0 0 1px rgba(77, 171, 247, 0.3);
+}
+
+/* 框选悬停高亮 */
+.card.marquee-hover {
+    box-shadow: 0 0 0 2px var(--color-accent);
+    transition: box-shadow 0.1s;
+}
+
+/* 搜索结果高亮 */
+.card.search-match {
+    box-shadow: 0 0 0 2px #ffd43b;
+    transition: box-shadow 0.2s;
+}
+
+.card.search-current {
+    box-shadow: 0 0 0 3px #ffa94d, 0 0 20px rgba(255, 169, 77, 0.5);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 3px #ffa94d, 0 0 20px rgba(255, 169, 77, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 0 5px #ffa94d, 0 0 30px rgba(255, 169, 77, 0.7);
+    }
+}
+
+/* ============================================
+   工具提示
+   ============================================ */
+.tooltip {
+    position: fixed;
+    background: #333;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 10003;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.tooltip.show {
+    opacity: 1;
+}
+
+/* ============================================
+   加载状态
+   ============================================ */
+.loading {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 20px 40px;
+    border-radius: 12px;
+    font-size: 16px;
+    z-index: 10004;
+}
+
+/* ============================================
+   右上角工具栏（竖向）
+   ============================================ */
+.top-toolbar {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    background: var(--color-bg-primary);
+    padding: 6px 4px;
+    border-radius: 8px;
+    box-shadow: 0 2px 12px var(--color-shadow);
+    z-index: 10000;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.top-toolbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    transition: background 0.15s, color 0.15s;
+    line-height: 1;
+}
+
+.top-toolbar-btn:hover {
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+
+.top-toolbar-btn:active {
+    background: var(--color-border-light);
+}
+
+.top-toolbar-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+.top-toolbar-btn.readonly-active {
+    color: #e03131;
+}
+
+.zoom-level {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    padding: 2px 0;
+    width: 34px;
+}
+
+/* ============================================
+   拖拽交互样式
+   ============================================ */
+/* 从工具栏拖出时的源按钮样式 */
+.toolbar-btn.dragging-source {
+    opacity: 0.4;
+    background: var(--color-bg-secondary);
+}
+
+/* 画布接受拖放时的视觉反馈 */
+#canvas-container.drag-over {
+    outline: 2px dashed var(--color-accent);
+    outline-offset: -2px;
+}
+
+/* ============================================
+   响应式调整
+   ============================================ */
+@media (max-width: 768px) {
+    .toolbar {
+        bottom: 10px;
+        padding: 6px 12px;
+        gap: 4px;
+    }
+
+    .toolbar-btn {
+        padding: 6px 8px;
+    }
+
+    .toolbar-icon {
+        width: 16px;
+        height: 16px;
+    }
+
+    .toolbar-label {
+        font-size: 10px;
+    }
+}
+
+/* ============================================
+   动画效果
+   ============================================ */
+@keyframes slideDown {
+    from {
+        transform: translate(-50%, -100%);
+        opacity: 0;
+    }
+    to {
+        transform: translate(-50%, 0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        transform: translate(-50%, 0);
+        opacity: 1;
+    }
+    to {
+        transform: translate(-50%, -100%);
+        opacity: 0;
+    }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
