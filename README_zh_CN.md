@@ -2,6 +2,10 @@
 
 借鉴 Obsidian Canvas 交互体验的思源笔记可视化白板挂件。在无限画布上创建文本卡片、分组容器和连线。
 
+<p align="center">
+  <img src="preview.png" alt="Canvas 白板预览" width="800">
+</p>
+
 ---
 
 ## 功能

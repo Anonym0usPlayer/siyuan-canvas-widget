@@ -2,6 +2,10 @@
 
 A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by Obsidian Canvas. Create text cards, groups, and connections on an infinite whiteboard inside your SiYuan workspace.
 
+<p align="center">
+  <img src="preview.png" alt="Canvas Widget Preview" width="800">
+</p>
+
 ---
 
 ## Features
