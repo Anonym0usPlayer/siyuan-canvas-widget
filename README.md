@@ -14,7 +14,8 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 - **Text cards** — Markdown content, 8 colors, rounded/rect shapes, solid/dashed borders
 - **Group cards** — dashed-border containers with renamable header, always behind other cards
 - **Drag from toolbar** — drag card/group buttons onto canvas, preview follows cursor
-- **Auto-edit** — new text cards enter edit mode immediately, double-click to re-edit
+- **Toolbar auto-hide** — toolbars fade out when mouse leaves, custom tooltips on hover
+- **Auto-edit** — new text cards enter edit mode immediately; `<textarea>` for reliable line breaks and Tab indentation
 
 ### Connections
 - **Bezier curves** — drag from card edge anchors to create smooth connections between cards
@@ -29,7 +30,7 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 
 ### Selection & Editing
 - **Click** to select, **drag** to move, **resize handles** on all four corners and edges
-- **Marquee selection** — drag on empty canvas to select multiple cards
+- **Marquee selection** — drag on empty canvas to select multiple cards, then drag the selection box to move them all at once
 - **Keyboard nudge** — arrow keys (±5px), `Shift+arrow` (±20px)
 - **Copy/Paste** (`Ctrl/Cmd+C/V`), **Duplicate** (`Ctrl/Cmd+D`), **Delete** (`Backspace`)
 - **Undo/Redo** (`Ctrl/Cmd+Z` / `Ctrl/Cmd+Y`) — 50-step history, strict step-by-step

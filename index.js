@@ -367,9 +367,20 @@ function zoom(delta, centerX, centerY) {
     autoSave();
 }
 
-// 重置视图
+// 重置缩放（以画布中心为基准，仅重置 zoom，不改变位置）
 function resetView() {
-    state.viewport = { x: 0, y: 0, zoom: 1 };
+    if (state.viewport.zoom === 1) return;
+    const container = document.getElementById('canvas-container');
+    const rect = container.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    // 以视口中心为基点缩放到 zoom=1
+    const oldZoom = state.viewport.zoom;
+    const canvasX = (cx - rect.left - state.viewport.x) / oldZoom;
+    const canvasY = (cy - rect.top - state.viewport.y) / oldZoom;
+    state.viewport.zoom = 1;
+    state.viewport.x = cx - rect.left - canvasX * 1;
+    state.viewport.y = cy - rect.top - canvasY * 1;
     updateCanvasTransform();
     updateZoomLabel();
     autoSave();
@@ -828,13 +839,11 @@ function bindNodeEvents(card, nodeId) {
     });
 }
 
-// 开始编辑节点
-// 开始编辑节点
+// 开始编辑节点（使用 textarea，换行和 Markdown 编辑更可靠）
 function startEditingNode(nodeId) {
     const card = document.querySelector(`[data-node-id="${nodeId}"]`);
     if (!card) return;
 
-    // 只允许编辑文本卡片
     const node = state.nodes.find(n => n.id === nodeId);
     if (!node || node.type !== 'text') {
         showMessage('此卡片类型不支持编辑');
@@ -847,60 +856,55 @@ function startEditingNode(nodeId) {
     state.editingNode = nodeId;
     card.classList.add('editing');
 
-    // 显示 Markdown 源代码供编辑
-    content.textContent = node.text;
-    content.contentEditable = 'true';
-    content.style.whiteSpace = 'pre-wrap';
-    content.style.fontFamily = 'monospace';
-    content.focus();
-
-    // 选中所有文本
-    const range = document.createRange();
-    range.selectNodeContents(content);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
+    // 用 <textarea> 替代 contenteditable（换行可靠、跨浏览器一致）
+    const textarea = document.createElement('textarea');
+    textarea.className = 'card-textarea';
+    textarea.value = node.text || '';
+    textarea.style.cssText = 'width:100%;height:100%;border:none;outline:none;resize:none;' +
+        'padding:12px;font:13px/1.6 Consolas,Monaco,monospace;' +
+        'background:var(--color-bg-secondary);color:var(--color-text-primary);' +
+        'border-radius:inherit;tab-size:4;';
+    content.innerHTML = '';
+    content.appendChild(textarea);
+    textarea.focus();
 
     // 保存编辑内容
     const saveEdit = () => {
-        const node = state.nodes.find(n => n.id === nodeId);
-        if (node) {
-            // 获取编辑后的纯文本（Markdown 源代码）
-            node.text = content.textContent;
-
+        const n = state.nodes.find(nn => nn.id === nodeId);
+        if (n) {
+            n.text = textarea.value;
             // 重新渲染 Markdown
-            content.innerHTML = parseMarkdown(node.text);
-            content.style.whiteSpace = '';
-            content.style.fontFamily = '';
-
+            content.innerHTML = parseMarkdown(n.text);
             autoSave();
         }
-
         state.editingNode = null;
         card.classList.remove('editing');
-        content.contentEditable = 'false';
-
-        content.removeEventListener('blur', saveEdit);
+        textarea.removeEventListener('blur', saveEdit);
+        textarea.removeEventListener('keydown', handleKeyDown);
     };
 
-    content.addEventListener('blur', saveEdit);
+    textarea.addEventListener('blur', saveEdit);
 
-    // Escape 键取消编辑
     const handleKeyDown = (e) => {
-        if (e.key === 'Escape') {
+        if (e.key === 'Escape' && !e.shiftKey) {
             e.preventDefault();
-            content.blur();
-            content.removeEventListener('keydown', handleKeyDown);
+            textarea.blur();
         }
-        // Ctrl/Cmd + Enter 保存
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
-            content.blur();
-            content.removeEventListener('keydown', handleKeyDown);
+            textarea.blur();
+        }
+        // Tab 键插入空格而非跳转焦点
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(end);
+            textarea.selectionStart = textarea.selectionEnd = start + 4;
         }
     };
 
-    content.addEventListener('keydown', handleKeyDown);
+    textarea.addEventListener('keydown', handleKeyDown);
 }
 
 // 开始拖拽节点
@@ -967,6 +971,92 @@ function stopDraggingNode() {
     document.removeEventListener('mousemove', onDraggingNode);
     document.removeEventListener('mouseup', stopDraggingNode);
     autoSave(); // 拖拽结束后统一保存
+}
+
+// 从框选框左键拖拽移动所有选中节点
+let _marqueeDragData = null;
+function startMarqueeDrag(e) {
+    if (state.isReadOnly) return;
+    state.isDragging = true;
+    state._dragActuallyMoved = false;
+
+    const pos = screenToCanvas(e.clientX, e.clientY);
+    _marqueeDragData = {
+        startX: pos.x,
+        startY: pos.y,
+        // 记录每个选中节点的初始位置
+        nodePositions: [...state.selectedNodes].map(id => {
+            const n = state.nodes.find(nn => nn.id === id);
+            return n ? { id, x: n.x, y: n.y } : null;
+        }).filter(Boolean)
+    };
+
+    document.addEventListener('mousemove', onMarqueeDrag);
+    document.addEventListener('mouseup', stopMarqueeDrag);
+}
+function onMarqueeDrag(e) {
+    if (!state.isDragging || !_marqueeDragData) return;
+
+    state._dragActuallyMoved = true;
+    const pos = screenToCanvas(e.clientX, e.clientY);
+    const dx = pos.x - _marqueeDragData.startX;
+    const dy = pos.y - _marqueeDragData.startY;
+
+    _marqueeDragData.nodePositions.forEach(np => {
+        const node = state.nodes.find(n => n.id === np.id);
+        if (!node) return;
+        let newX = np.x + dx;
+        let newY = np.y + dy;
+        if (state.isSnapToGrid) {
+            newX = Math.round(newX / CONFIG.GRID_SIZE) * CONFIG.GRID_SIZE;
+            newY = Math.round(newY / CONFIG.GRID_SIZE) * CONFIG.GRID_SIZE;
+        }
+        node.x = newX;
+        node.y = newY;
+        const card = document.querySelector(`[data-node-id="${np.id}"]`);
+        if (card) { card.style.left = newX + 'px'; card.style.top = newY + 'px'; }
+        updateEdgesForNode(np.id);
+    });
+    // 实时更新框选框位置
+    updateMarqueeRect();
+}
+function updateMarqueeRect() {
+    if (!state._marqueeRect) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    state.selectedNodes.forEach(id => {
+        const node = state.nodes.find(n => n.id === id);
+        if (node) {
+            minX = Math.min(minX, node.x);
+            minY = Math.min(minY, node.y);
+            maxX = Math.max(maxX, node.x + node.width);
+            maxY = Math.max(maxY, node.y + node.height);
+        }
+    });
+    if (minX >= Infinity) return;
+    const pad = 8;
+    const marquee = document.getElementById('marquee-selection');
+    if (marquee) {
+        marquee.style.left = (minX - pad) + 'px';
+        marquee.style.top = (minY - pad) + 'px';
+        marquee.style.width = (maxX - minX + pad * 2) + 'px';
+        marquee.style.height = (maxY - minY + pad * 2) + 'px';
+    }
+    state._marqueeRect = { left: minX - pad, top: minY - pad,
+        width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
+}
+function stopMarqueeDrag() {
+    if (state._dragActuallyMoved) {
+        saveHistory();
+    }
+    // 确保框选框位置最终一致
+    updateMarqueeRect();
+
+    state.isDragging = false;
+    _marqueeDragData = null;
+    state._dragActuallyMoved = false;
+    document.removeEventListener('mousemove', onMarqueeDrag);
+    document.removeEventListener('mouseup', stopMarqueeDrag);
+    autoSave();
 }
 
 // ============================================
@@ -2514,6 +2604,39 @@ function bindPageLifecycleEvents() {
 function bindGlobalEvents() {
     const container = document.getElementById('canvas-container');
 
+    // 自定义 tooltip（iframe 中浏览器禁用原生 title tooltip）
+    const tooltipEl = document.createElement('div');
+    tooltipEl.className = 'tooltip';
+    document.body.appendChild(tooltipEl);
+    let _ttTimer = null;
+    document.querySelectorAll('#toolbar button, #top-toolbar button').forEach(btn => {
+        const text = btn.getAttribute('title');
+        if (!text) return;
+        btn.removeAttribute('title');
+        btn.addEventListener('mouseenter', () => {
+            clearTimeout(_ttTimer);
+            tooltipEl.textContent = text;
+            // 先设为不可见但占据布局空间，以便读取尺寸
+            tooltipEl.style.visibility = 'hidden';
+            tooltipEl.classList.add('show');
+            const tw = tooltipEl.offsetWidth;
+            const th = tooltipEl.offsetHeight;
+            tooltipEl.style.visibility = '';
+            const rect = btn.getBoundingClientRect();
+            const isTopBar = btn.closest('#top-toolbar');
+            if (isTopBar) {
+                tooltipEl.style.left = (rect.left - tw - 10) + 'px';
+                tooltipEl.style.top = (rect.top + rect.height / 2 - th / 2) + 'px';
+            } else {
+                tooltipEl.style.left = (rect.left + rect.width / 2 - tw / 2) + 'px';
+                tooltipEl.style.top = (rect.top - th - 10) + 'px';
+            }
+        });
+        btn.addEventListener('mouseleave', () => {
+            _ttTimer = setTimeout(() => tooltipEl.classList.remove('show'), 100);
+        });
+    });
+
     // Space 键状态跟踪
     state.isSpacePressed = false;
 
@@ -2571,6 +2694,10 @@ function bindGlobalEvents() {
 
             if (!isOnCard && !isOnEdge && !isOnAnchor && !isOnResize && !isOnToolbar && !isOnMarquee && !inMarqueeRect) {
                 startMarqueeSelection(e);
+            }
+            // 左键点击框选框内部或边框 → 拖拽移动所有选中节点
+            if ((isOnMarquee || inMarqueeRect) && state._marqueeRect && state.selectedNodes.size > 0) {
+                startMarqueeDrag(e);
             }
         }
     });
