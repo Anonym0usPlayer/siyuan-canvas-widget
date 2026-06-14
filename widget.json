@@ -1,17 +1,17 @@
 {
   "name": "siyuan-canvas-widget",
-  "author": "Canvas Team",
+  "author": "Anonym0usPlayer"，
   "url": "https://github.com/Anonym0usPlayer/siyuan-canvas-widget",
   "version": "1.0.0",
   "minAppVersion": "3.0.0",
   "backends": ["windows", "linux", "darwin", "docker", "ios", "android"],
   "frontends": ["desktop", "mobile"],
   "displayName": {
-    "zh_CN": "Canvas 白板",
-    "en_US": "Canvas Whiteboard"
+    "zh_CN": "Canvas 白板精简版",
+    "en_US": "Canvas Whiteboard Lite"
   },
   "description": {
-    "zh_CN": "Obsidian Canvas 风格的无限画布白板，支持卡片、连接线等功能",
+    "zh_CN": "Obsidian Canvas 风格的无限画布白板精简版，支持卡片、连接线等功能",
     "en_US": "Obsidian Canvas-style infinite whiteboard with cards, connections, and note embedding"
   },
   "readme": {
