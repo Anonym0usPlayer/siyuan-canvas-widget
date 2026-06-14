@@ -285,8 +285,7 @@ async function loadCanvas() {
                 state.isAlignObjects = data.settings.isAlignObjects ?? false;
                 state.isReadOnly = data.settings.isReadOnly ?? false;
             }
-            console.log('[Canvas] 成功加载画布数据:', state.nodes.length, '个节点,', state.edges.length, '条边',
-                        '| 对齐网格:', state.isSnapToGrid, '只读:', state.isReadOnly);
+            // 数据加载成功
             return true;
         }
     } catch (err) {
@@ -720,8 +719,8 @@ function clearSelection() {
     state.selectedNodes.clear();
 
     state.selectedEdges.forEach(id => {
-        const path = document.querySelector(`[data-edge-id="${id}"]`);
-        if (path) path.classList.remove('selected');
+        const el = document.querySelector(`.edge-path[data-edge-id="${id}"]`);
+        if (el) el.classList.remove('selected');
     });
     state.selectedEdges.clear();
 }
@@ -2440,9 +2439,8 @@ async function loadNoteContent(nodeId, blockId) {
     };
 
     try {
-        // 方法1：调用 /api/filetree/getDoc 获取块 HTML（config.js 同款 API）
+        // 方法1：调用 /api/filetree/getDoc 获取块 HTML
         const res = await request('/api/filetree/getDoc', { id: blockId });
-        console.log('[NoteCard] getDoc response code:', res?.code, 'hasData:', !!res?.data);
 
         if (res && res.code === 0 && res.data && res.data.content) {
             const origin = window.top?.location?.origin || '';
@@ -2480,9 +2478,7 @@ async function loadNoteContent(nodeId, blockId) {
         }
 
         // 方法2：尝试 /api/block/getBlockKramdown 获取 markdown
-        console.log('[NoteCard] getDoc failed, trying getBlockKramdown...');
         const mdRes = await request('/api/block/getBlockKramdown', { id: blockId });
-        console.log('[NoteCard] getBlockKramdown response code:', mdRes?.code);
 
         if (mdRes && mdRes.code === 0 && mdRes.data) {
             const markdown = mdRes.data.kramdown || '';
@@ -2533,7 +2529,6 @@ async function init() {
     // 绑定页面关闭/刷新时的保存事件
     bindPageLifecycleEvents();
 
-    console.log('Canvas 白板初始化完成');
 }
 
 // 将持久化设置应用到 UI（只读、对齐网格等）并触发首次保存
@@ -3182,7 +3177,7 @@ function handleToolbarDrop(action, canvasX, canvasY) {
             showMessage('已添加组');
             break;
         default:
-            console.warn('未知的拖放操作:', action);
+            break;
     }
 }
 
