@@ -59,7 +59,6 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 - **Primary**: block attribute `custom-canvas-data` — data lives and dies with the widget block
 - **File copy**: `/data/assets/CanvasFiles/<blockID>.canvas` — visible in SiYuan file tree, auto-registered as referenced asset
 - **Auto-save** — debounced 300ms, both block attribute and file on every change
-- **Automatic migration** — old data from widget directory migrates on load
 
 ---
 
