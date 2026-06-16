@@ -34,7 +34,8 @@ const state = {
     isDirty: false,            // 是否有未保存的更改
     widgetID: null,            // 挂件ID
     // 可切换的功能开关
-    isReadOnly: false,         // 只读模式
+    isReadOnly: false,         // 只读模式（由设置面板切换）
+    isPreviewMode: true,       // 预览模式（默认开启，工具栏隐藏，禁止编辑；点击 👁 切换为编辑模式）
     isSnapToGrid: true,        // 对齐网格（默认开启）
     isAlignObjects: false      // 对齐物体
 };
@@ -131,6 +132,154 @@ const COLORS = {
     white: '#ffffff'
 };
 
+// SiYuan 命名颜色 → JSON Canvas 兼容 hex 颜色（用于保存到 Obsidian 兼容的 .canvas 文件）
+const COLOR_TO_HEX = { ...COLORS };
+// JSON Canvas 预设编号 → SiYuan 命名颜色（用于加载 Obsidian .canvas 文件）
+const OBSIDIAN_PRESET_MAP = { '1': 'red', '2': 'orange', '3': 'yellow', '4': 'green', '5': 'blue', '6': 'purple' };
+// Hex → SiYuan 命名颜色（反向查找，忽略大小写）
+const HEX_TO_SIYUAN = {};
+for (const [key, hex] of Object.entries(COLORS)) {
+    HEX_TO_SIYUAN[hex.toLowerCase()] = key;
+}
+
+/**
+ * 将 SiYuan 内部节点数据清洗为 Obsidian JSON Canvas 兼容格式
+ * - 命名颜色 "white"/"red"… → hex "#ffffff"/"#ff6b6b"…
+ * - 默认白色卡片的 color 字段被删除，让 Obsidian 使用默认样式
+ * - shape "rounded" 删除（Obsidian 默认即圆角），"rect" → "rectangle"
+ */
+function cleanNodeForSave(node) {
+    const cleaned = {};
+    // JSON Canvas 标准字段
+    cleaned.id = node.id;
+    cleaned.type = node.type;
+    cleaned.x = node.x;
+    cleaned.y = node.y;
+    cleaned.width = node.width;
+    cleaned.height = node.height;
+
+    // text 字段（仅 text 类型）
+    if (node.type === 'text' && node.text !== undefined) {
+        cleaned.text = node.text;
+    }
+    // file/subpath（仅 file 类型）
+    if (node.type === 'file' && node.file) {
+        cleaned.file = node.file;
+        if (node.subpath) cleaned.subpath = node.subpath;
+    }
+    // url（仅 link 类型）
+    if (node.type === 'link' && node.url) {
+        cleaned.url = node.url;
+    }
+    // label/background/backgroundStyle（仅 group 类型）
+    if (node.type === 'group') {
+        if (node.label) cleaned.label = node.label;
+        if (node.background) {
+            cleaned.background = typeof node.background === 'string' && COLOR_TO_HEX[node.background]
+                ? COLOR_TO_HEX[node.background] : node.background;
+        }
+        if (node.backgroundStyle) cleaned.backgroundStyle = node.backgroundStyle;
+    }
+
+    // color：命名颜色 → hex；白色不保存（让 Obsidian 用默认样式）
+    if (node.color && node.color !== 'white') {
+        cleaned.color = COLOR_TO_HEX[node.color] || node.color;
+    }
+
+    // shape：rect → rectangle，rounded 不保存（Obsidian 默认即圆角）
+    if (node.shape === 'rect') {
+        cleaned.shape = 'rectangle';
+    } else if (node.shape && node.shape !== 'rounded') {
+        cleaned.shape = node.shape;
+    }
+
+    // 保留 SiYuan 内部字段（Obsidian 会忽略未知字段）
+    if (node.align && node.align !== 'left') cleaned.align = node.align;
+    if (node.border && node.border !== 'solid') cleaned.border = node.border;
+    if (node.zIndex !== undefined) cleaned.zIndex = node.zIndex;
+    if (node.blockId !== null && node.blockId !== undefined) cleaned.blockId = node.blockId;
+    if (node.mediaUrl !== null && node.mediaUrl !== undefined) cleaned.mediaUrl = node.mediaUrl;
+    if (node.mediaType !== null && node.mediaType !== undefined) cleaned.mediaType = node.mediaType;
+    if (node.label !== null && node.label !== undefined && node.type !== 'group') cleaned.label = node.label;
+    if (node.url !== null && node.url !== undefined && node.type !== 'link') cleaned.url = node.url;
+    if (node.file !== null && node.file !== undefined && node.type !== 'file') cleaned.file = node.file;
+    if (node.subpath !== null && node.subpath !== undefined && node.type !== 'file') cleaned.subpath = node.subpath;
+    if (node.background !== null && node.background !== undefined && node.type !== 'group') cleaned.background = node.background;
+    if (node.backgroundStyle !== null && node.backgroundStyle !== undefined && node.type !== 'group') cleaned.backgroundStyle = node.backgroundStyle;
+    if (node.edges && node.edges.length > 0) cleaned.edges = node.edges;
+
+    return cleaned;
+}
+
+/**
+ * 将 Obsidian / 外部 .canvas 加载的节点数据规范化为 SiYuan 内部格式
+ * - 预设编号 "1"~"6" → 命名颜色 "red"~"purple"
+ * - hex 颜色 → 对应的命名颜色（已知色值），否则保留 hex 并设 white 基色
+ * - "rectangle" shape → "rect"
+ * - 缺少字段补默认值
+ */
+function normalizeNodeFromLoad(node) {
+    // color 标准化
+    if (typeof node.color === 'string') {
+        if (OBSIDIAN_PRESET_MAP[node.color]) {
+            node.color = OBSIDIAN_PRESET_MAP[node.color];
+        } else {
+            const lower = node.color.toLowerCase();
+            if (HEX_TO_SIYUAN[lower]) {
+                node.color = HEX_TO_SIYUAN[lower];
+            }
+            // 其他 hex 颜色保留原值（内部渲染用 background 属性携带 hex 即可）
+        }
+    }
+
+    // shape 标准化
+    if (node.shape === 'rectangle') {
+        node.shape = 'rect';
+    } else if (!node.shape || node.shape === 'rounded') {
+        // Obsidian 默认是圆角卡片
+        node.shape = 'rounded';
+    }
+
+    // 缺失字段补默认值
+    if (!node.color) node.color = 'white';
+    if (!node.align) node.align = 'left';
+    if (!node.border) node.border = 'solid';
+    if (node.url === undefined || node.url === '') node.url = null;
+    if (node.file === undefined || node.file === '') node.file = null;
+    if (node.subpath === undefined || node.subpath === '') node.subpath = null;
+    if (node.label === undefined || node.label === '') node.label = null;
+    if (node.background === undefined || node.background === '') node.background = null;
+    if (node.backgroundStyle === undefined) node.backgroundStyle = 'cover';
+    if (node.zIndex === undefined) node.zIndex = 0;
+    if (node.blockId === undefined) node.blockId = null;
+    if (node.mediaUrl === undefined) node.mediaUrl = null;
+    if (node.mediaType === undefined) node.mediaType = null;
+    if (!Array.isArray(node.edges)) node.edges = [];
+
+    return node;
+}
+
+/**
+ * 清洗边数据中不必要保存的颜色（默认颜色不保存，让 Obsidian 用默认样式）
+ */
+function cleanEdgeForSave(edge) {
+    const cleaned = {
+        id: edge.id,
+        fromNode: edge.fromNode,
+        toNode: edge.toNode,
+    };
+    if (edge.fromSide) cleaned.fromSide = edge.fromSide;
+    if (edge.toSide) cleaned.toSide = edge.toSide;
+    if (edge.fromEnd && edge.fromEnd !== 'none') cleaned.fromEnd = edge.fromEnd;
+    if (edge.toEnd && edge.toEnd !== 'arrow') cleaned.toEnd = edge.toEnd;
+    if (edge.label) cleaned.label = edge.label;
+    // color：命名颜色 → hex
+    if (edge.color && edge.color !== '#7c7c7c') {
+        cleaned.color = COLOR_TO_HEX[edge.color] || edge.color;
+    }
+    return cleaned;
+}
+
 // ============================================
 // 2. SiYuan API 封装
 // ============================================
@@ -165,24 +314,36 @@ function getWidgetID() {
     }
 }
 
-// 获取画布文件路径
+// 获取画布文件路径（widget 数据目录下的 data/ 子目录，结构清晰，不会被思源标记为「未引用资源」）
+const WIDGET_DATA_DIR = '/data/widgets/siyuan-canvas-widget/data/';
+
 function getCanvasFilePath() {
-    return `/data/assets/CanvasFiles/${state.widgetID}.canvas`;
+    return `${WIDGET_DATA_DIR}${state.widgetID}.canvas`;
 }
 
-// 确保存储目录存在（只执行一次）
-let _saveDirEnsured = false;
-async function ensureSaveDir() {
-    if (_saveDirEnsured) return;
+// 旧存储路径（v1.2.x 之前），用于数据迁移
+const LEGACY_CANVAS_DIR = '/data/assets/CanvasFiles/';
+function getLegacyCanvasFilePath() {
+    return `${LEGACY_CANVAS_DIR}${state.widgetID}.canvas`;
+}
+
+// 旧 widget 扁平路径（整合到 data/ 之前），用于迁移
+const LEGACY_FLAT_WIDGET_DIR = '/data/widgets/siyuan-canvas-widget/';
+function getLegacyFlatWidgetFilePath() {
+    return `${LEGACY_FLAT_WIDGET_DIR}${state.widgetID}.canvas`;
+}
+
+// 确保 data/ 子目录存在（只执行一次）
+let _dataDirEnsured = false;
+function ensureDataDir() {
+    if (_dataDirEnsured) return;
+    _dataDirEnsured = true;
     try {
         const formData = new FormData();
-        formData.append('path', '/data/assets/CanvasFiles/');
+        formData.append('path', '/data/widgets/siyuan-canvas-widget/data/');
         formData.append('isDir', 'true');
-        await fetch('/api/file/putFile', { method: 'POST', body: formData });
-        _saveDirEnsured = true;
-    } catch (err) {
-        // 目录可能已存在，忽略错误
-    }
+        fetch('/api/file/putFile', { method: 'POST', body: formData }).catch(() => {});
+    } catch (_) { /* 目录可能已存在 */ }
 }
 
 // 保存画布数据（每次调用立即写入磁盘）
@@ -192,41 +353,116 @@ async function saveCanvas() {
         return;
     }
     try {
-        // 确保存储目录存在
-        await ensureSaveDir();
+        // 清洗节点/边数据为 Obsidian JSON Canvas 兼容格式
+        const cleanedNodes = state.nodes.map(cleanNodeForSave);
+        const cleanedEdges = state.edges.map(cleanEdgeForSave);
 
         const data = {
             version: '1.0',
-            nodes: state.nodes,
-            edges: state.edges,
+            nodes: cleanedNodes,
+            edges: cleanedEdges,
             viewport: state.viewport,
             settings: {
                 isSnapToGrid: state.isSnapToGrid,
                 isAlignObjects: state.isAlignObjects,
-                isReadOnly: state.isReadOnly
+                isReadOnly: state.isReadOnly,
+                isPreviewMode: state.isPreviewMode
             }
         };
         const jsonStr = JSON.stringify(data);
+
+        // 1. 主存储：块属性（数据随块生灭，块删则数据删，不残留文件）
+        await saveCanvasToAttr(jsonStr);
+
+        // 2. 文件备份：写入 widget data/ 子目录
+        ensureDataDir();
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const formData = new FormData();
         formData.append('path', getCanvasFilePath());
         formData.append('file', blob, `${state.widgetID}.canvas`);
-
-        const res = await fetch('/api/file/putFile', {
-            method: 'POST',
-            body: formData
-        });
+        const res = await fetch('/api/file/putFile', { method: 'POST', body: formData });
         const result = await res.json();
         if (result.code !== 0) {
-            console.error('[Canvas] 保存失败:', result.code, result.msg);
+            console.error('[Canvas] 文件备份失败:', result.code, result.msg);
+        }
+
+        // 迁移：清理旧路径残留文件
+        if (!_legacyCleanedUp) {
+            _legacyCleanedUp = true;
+            const rm = (path) => fetch('/api/file/removeFile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            }).catch(() => {});
+            // 清理 /data/assets/CanvasFiles/（v1.2.0 之前）
+            rm(getLegacyCanvasFilePath());
+            // 清理 /data/widgets/siyuan-canvas-widget/（整合到 data/ 之前）
+            rm(getLegacyFlatWidgetFilePath());
         }
     } catch (err) {
         console.error('[Canvas] 保存异常:', err);
     }
 }
 
-// 自动保存（防抖 300ms，避免平移/缩放时频繁写磁盘）
+// 旧文件清理标记（只执行一次）
+let _legacyCleanedUp = false;
+
+// ============================================
+// 2.5 块属性存储（主存储：数据随块生灭，块删则数据删）
+// ============================================
+
+/**
+ * 将画布数据作为块属性保存（主存储）
+ * 块属性随块删除而清除，不会产生残留文件
+ */
+async function saveCanvasToAttr(dataJson) {
+    try {
+        const res = await fetch('/api/attr/setBlockAttrs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: state.widgetID,
+                attrs: { 'custom-canvas-data': dataJson }
+            })
+        });
+        const result = await res.json();
+        if (result.code !== 0) {
+            console.error('[Canvas] 保存块属性失败:', result.code, result.msg);
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error('[Canvas] 保存块属性异常:', err);
+        return false;
+    }
+}
+
+/**
+ * 从块属性加载画布数据（主存储）
+ * 返回解析后的 data 对象，失败返回 null
+ */
+async function loadCanvasFromAttr() {
+    try {
+        const res = await fetch('/api/attr/getBlockAttrs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: state.widgetID })
+        });
+        const result = await res.json();
+        if (result.code !== 0) return null;
+        const raw = result.data && result.data['custom-canvas-data'];
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (err) {
+        console.error('[Canvas] 读取块属性异常:', err);
+        return null;
+    }
+}
+
+// 自动保存防抖计时器
 let _autoSaveTimer = null;
+
+// 自动保存（防抖 300ms）
 function autoSave() {
     state.isDirty = true;
     clearTimeout(_autoSaveTimer);
@@ -249,43 +485,83 @@ async function forceSave() {
     }
 }
 
-// 加载画布数据
-async function loadCanvas() {
-    if (!state.widgetID) return false;
+// 从指定路径读取并解析 canvas 数据；失败返回 null
+async function _readCanvasFile(path) {
     try {
         const res = await fetch('/api/file/getFile', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: getCanvasFilePath() })
+            body: JSON.stringify({ path })
         });
         // getFile API: 200 = 文件原始内容, 202 = 错误 JSON（文件不存在等）
-        if (!res.ok) {
-            console.log('[Canvas] 画布文件不存在，使用空画布');
-            return false;
-        }
+        if (!res.ok) return null;
         const rawText = await res.text();
-        // 尝试解析为错误 JSON（某些情况下 200 也可能返回错误 JSON）
+        // 某些情况下 200 也可能返回错误 JSON
         try {
             const errorObj = JSON.parse(rawText);
-            if (errorObj.code && errorObj.code !== 0) {
-                console.log('[Canvas] 加载画布数据失败，code:', errorObj.code, errorObj.msg);
-                return false;
-            }
-        } catch (_) {
-            // 不是 JSON，那就是正常文件内容，继续处理
+            if (errorObj.code && errorObj.code !== 0) return null;
+        } catch (_) { /* 不是 JSON，正常内容 */ }
+        return JSON.parse(rawText);
+    } catch (_) {
+        return null;
+    }
+}
+
+// 加载画布数据（块属性优先 → 文件备选 → 旧路径迁移）
+async function loadCanvas() {
+    if (!state.widgetID) return false;
+    try {
+        let data = null;
+        let needSave = false;
+
+        // 1. 优先从块属性加载（主存储，无文件残留）
+        data = await loadCanvasFromAttr();
+        if (data) {
+            console.log('[Canvas] 从块属性加载');
         }
-        const data = JSON.parse(rawText);
+
+        // 2. 块属性无数据 → 尝试 widget data/ 子目录
+        if (!data) {
+            data = await _readCanvasFile(getCanvasFilePath());
+            if (data) {
+                console.log('[Canvas] 从 widget data/ 加载，回存块属性');
+                needSave = true;
+            }
+        }
+
+        // 3. 尝试旧路径迁移（widget 扁平目录 → /data/assets/）
+        if (!data) {
+            data = await _readCanvasFile(getLegacyFlatWidgetFilePath());
+            if (data) {
+                console.log('[Canvas] 从 widget 扁平目录迁移');
+                needSave = true;
+            } else {
+                data = await _readCanvasFile(getLegacyCanvasFilePath());
+                if (data) {
+                    console.log('[Canvas] 从旧 /data/assets/ 路径迁移');
+                    needSave = true;
+                }
+            }
+        }
+
         if (data && data.nodes) {
-            state.nodes = data.nodes || [];
+            // 规范化节点数据（兼容 Obsidian JSON Canvas 格式）
+            state.nodes = (data.nodes || []).map(normalizeNodeFromLoad);
             state.edges = data.edges || [];
             state.viewport = data.viewport || { x: 0, y: 0, zoom: 1 };
-            // 恢复设置（兼容旧数据无 settings 字段）
+            // 恢复设置
             if (data.settings) {
                 state.isSnapToGrid = data.settings.isSnapToGrid ?? true;
                 state.isAlignObjects = data.settings.isAlignObjects ?? false;
                 state.isReadOnly = data.settings.isReadOnly ?? false;
+                state.isPreviewMode = data.settings.isPreviewMode ?? true;
             }
-            // 数据加载成功
+
+            // 数据来自文件时，回存到块属性（完成迁移）
+            if (needSave) {
+                await saveCanvas();
+            }
+
             return true;
         }
     } catch (err) {
@@ -802,7 +1078,7 @@ function bindNodeEvents(card, nodeId) {
             clearSelection();
             selectNode(nodeId);
         }
-        if (state.isReadOnly) {
+        if (!isEditingAllowed()) {
             showReadOnlyContextMenu(e.clientX, e.clientY);
         } else {
             showContextMenu(e.clientX, e.clientY, nodeId);
@@ -845,6 +1121,7 @@ function bindNodeEvents(card, nodeId) {
 
 // 开始编辑节点（使用 textarea，换行和 Markdown 编辑更可靠）
 function startEditingNode(nodeId) {
+    if (!isEditingAllowed()) return;
     const card = document.querySelector(`[data-node-id="${nodeId}"]`);
     if (!card) return;
 
@@ -1044,7 +1321,7 @@ function applyAlignSnap(aligns, draggedRect) {
 
 // 开始拖拽节点
 function startDraggingNode(nodeId, e) {
-    if (state.isReadOnly) return;
+    if (!isEditingAllowed()) return;
     let dragNodeId = nodeId;
 
     // Option/Alt + 拖拽：复制一份卡片并拖拽副本
@@ -1173,7 +1450,7 @@ function stopDraggingNode() {
 // 从框选框左键拖拽移动所有选中节点
 let _marqueeDragData = null;
 function startMarqueeDrag(e) {
-    if (state.isReadOnly) return;
+    if (!isEditingAllowed()) return;
 
     // Option/Alt + 拖拽框选：复制所有选中节点并拖拽副本
     if (e.altKey) {
@@ -1359,6 +1636,7 @@ function stopMarqueeDrag() {
 
 // 开始调整节点大小
 function startResizingNode(nodeId, corner, e) {
+    if (!isEditingAllowed()) return;
     state.isResizing = true;
     const node = state.nodes.find(n => n.id === nodeId);
     if (!node) { state.isResizing = false; return; }
@@ -1478,7 +1756,7 @@ function createEdge(fromNode, toNode, fromSide, toSide, options = {}) {
         fromEnd: options.fromEnd ?? 'none',  // 'none' | 'arrow'
         toEnd: options.toEnd ?? 'arrow',     // 'none' | 'arrow'
         label: options.label ?? '',
-        color: options.color ?? '#808080'
+        color: options.color ?? '#7c7c7c'
     };
 
     state.edges.push(edge);
@@ -1649,7 +1927,7 @@ function renderEdge(edgeData) {
     };
 
     const handleEdgeContextMenu = (e) => {
-        if (state.isReadOnly) return;
+        if (!isEditingAllowed()) return;
         e.preventDefault();
         e.stopPropagation();
         showEdgeContextMenu(e.clientX, e.clientY, edgeData.id);
@@ -1787,7 +2065,7 @@ let edgeEndpointDragData = null;
 
 // 开始拖拽边端点
 function startEdgeEndpointDrag(edgeId, endpoint, e) {
-    if (state.isReadOnly) return;
+    if (!isEditingAllowed()) return;
     const edge = state.edges.find(e => e.id === edgeId);
     if (!edge) return;
 
@@ -2012,7 +2290,7 @@ function endEdgeEndpointDrag(e) {
 let tempEdgeData = null;
 
 function startEdgeDrag(fromNodeId, fromSide, e) {
-    if (state.isReadOnly) return;
+    if (!isEditingAllowed()) return;
 
     const fromNode = state.nodes.find(n => n.id === fromNodeId);
     if (!fromNode) return;
@@ -2570,7 +2848,42 @@ function toggleReadOnly() {
     autoSave();
 }
 
-// 切换设置下拉面板
+// 编辑操作是否允许（只读或预览模式下禁止）
+function isEditingAllowed() {
+    return !state.isReadOnly && !state.isPreviewMode;
+}
+
+// 切换预览/编辑模式
+function togglePreviewMode() {
+    state.isPreviewMode = !state.isPreviewMode;
+    updateModeUI();
+    autoSave();
+}
+
+// 更新模式相关的 UI
+function updateModeUI() {
+    const body = document.body;
+    const btn = document.getElementById('btn-toggle-mode');
+    if (!btn) return;
+
+    if (state.isPreviewMode) {
+        body.classList.add('preview-mode');
+        body.classList.remove('edit-mode');
+        btn.classList.add('mode-active');
+        btn.querySelector('svg').innerHTML =
+            '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+        // 退出编辑模式
+        if (state.editingNode) finishEditingNode();
+        showMessage('预览模式');
+    } else {
+        body.classList.remove('preview-mode');
+        body.classList.add('edit-mode');
+        btn.classList.remove('mode-active');
+        btn.querySelector('svg').innerHTML =
+            '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/>';
+        showMessage('编辑模式');
+    }
+}
 function toggleSettingsDropdown() {
     const dropdown = document.getElementById('settings-dropdown');
     if (dropdown.style.display === 'block') {
@@ -2586,6 +2899,8 @@ function toggleSettingsDropdown() {
         { label: '对齐物体', checkable: true, checked: !!state.isAlignObjects, action: () => { toggleAlignObjects(); toggleSettingsDropdown(); } },
         { divider: true },
         { label: '只读', checkable: true, checked: !!state.isReadOnly, action: () => { toggleReadOnly(); toggleSettingsDropdown(); } },
+        { divider: true },
+        { label: `存储：块属性（块删即清，不残留）`, disabled: true },
     ];
     buildMenu(dropdown, items);
 
@@ -2639,7 +2954,8 @@ async function exportAsImage() {
 
     // 构建 SVG
     let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="${minX - pad} ${minY - pad} ${totalW} ${totalH}">`;
-    svgContent += `<rect x="${minX - pad}" y="${minY - pad}" width="${totalW}" height="${totalH}" fill="#ffffff"/>`;
+    svgContent += `<defs><filter id="export-shadow" x="-10%" y="-10%" width="130%" height="130%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.15"/></filter></defs>`;
+    svgContent += `<rect x="${minX - pad}" y="${minY - pad}" width="${totalW}" height="${totalH}" fill="#fafafa"/>`;
 
     // 绘制边
     state.edges.forEach(edge => {
@@ -2650,7 +2966,7 @@ async function exportAsImage() {
         const end = getAnchorPosition(toNode, edge.toSide);
         const path = calculateBezierPath(edge);
         if (path) {
-            const color = edge.color || '#808080';
+            const color = edge.color || '#7c7c7c';
             svgContent += `<path d="${path}" stroke="${color}" stroke-width="2" fill="none"`;
             if (edge.toEnd === 'arrow') {
                 svgContent += ` marker-end="url(#export-arrow-${edge.id})"`;
@@ -2666,9 +2982,11 @@ async function exportAsImage() {
     // 绘制节点
     state.nodes.forEach(node => {
         const fillColor = node.color && COLORS[node.color] ? COLORS[node.color] : '#ffffff';
-        const rx = node.shape === 'rounded' ? 8 : 0;
-        svgContent += `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${rx}" fill="${fillColor}" stroke="#333" stroke-width="2"`;
+        const rx = node.shape === 'rounded' ? 12 : 0;
+        const borderColor = node.color && node.color !== 'white' ? COLORS[node.color] : '#d0d0d0';
+        svgContent += `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${rx}" fill="${fillColor}" stroke="${borderColor}" stroke-width="1"`;
         if (node.border === 'dashed') svgContent += ` stroke-dasharray="6,4"`;
+        svgContent += ` filter="url(#export-shadow)"`;
         svgContent += `/>`;
         // 文本
         const textContent = (node.text || '').split('\n')[0].substring(0, 40);
@@ -2741,6 +3059,89 @@ function fitAllNodes() {
     updateCanvasTransform();
     updateZoomLabel();
     autoSave();
+}
+
+/**
+ * 导出 .canvas 文件到 /data/assets/CanvasFiles/
+ * 并通过 custom-data-assets 属性注册引用，避免被思源标记为"未引用资源"
+ */
+async function exportCanvasFile() {
+    if (!state.widgetID) return;
+    if (state.nodes.length === 0) {
+        showMessage('画布为空，无需导出');
+        return;
+    }
+    try {
+        // 清洗数据
+        const cleanedNodes = state.nodes.map(cleanNodeForSave);
+        const cleanedEdges = state.edges.map(cleanEdgeForSave);
+        const data = {
+            version: '1.0',
+            nodes: cleanedNodes,
+            edges: cleanedEdges,
+            viewport: state.viewport,
+            settings: {
+                isSnapToGrid: state.isSnapToGrid,
+                isAlignObjects: state.isAlignObjects,
+                isReadOnly: state.isReadOnly,
+                isPreviewMode: state.isPreviewMode
+            }
+        };
+        const jsonStr = JSON.stringify(data);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const safeName = `canvas-${timestamp}`;
+        const exportPath = `/data/assets/CanvasFiles/${safeName}.canvas`;
+
+        // 确保目录存在
+        try {
+            const dirFd = new FormData();
+            dirFd.append('path', '/data/assets/CanvasFiles/');
+            dirFd.append('isDir', 'true');
+            await fetch('/api/file/putFile', { method: 'POST', body: dirFd });
+        } catch (_) { /* 目录可能已存在 */ }
+
+        // 写入 .canvas 文件
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const formData = new FormData();
+        formData.append('path', exportPath);
+        formData.append('file', blob, `${safeName}.canvas`);
+        const res = await fetch('/api/file/putFile', { method: 'POST', body: formData });
+        const result = await res.json();
+        if (result.code !== 0) {
+            showMessage('导出失败: ' + result.msg);
+            return;
+        }
+
+        // 注册资源引用（避免被标记为"未引用资源"）
+        try {
+            const existingAttrsRes = await fetch('/api/attr/getBlockAttrs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: state.widgetID })
+            });
+            const existingAttrs = await existingAttrsRes.json();
+            let existingAssets = '';
+            if (existingAttrs.code === 0 && existingAttrs.data) {
+                existingAssets = existingAttrs.data['custom-data-assets'] || '';
+            }
+            const newAssets = existingAssets
+                ? existingAssets + '\n' + exportPath
+                : exportPath;
+            await fetch('/api/attr/setBlockAttrs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: state.widgetID,
+                    attrs: { 'custom-data-assets': newAssets }
+                })
+            });
+        } catch (_) { /* 引用注册失败不阻塞导出 */ }
+
+        showMessage(`已导出: ${exportPath}`);
+    } catch (err) {
+        console.error('[Canvas] 导出 .canvas 异常:', err);
+        showMessage('导出失败');
+    }
 }
 
 // 加载笔记内容（用于 note 类型卡片）
@@ -2860,40 +3261,51 @@ function applySettingsToUI() {
         if (toolbar) toolbar.style.display = '';
     }
     updateSettingsButton();
+    updateModeUI();
     // 确保设置被保存到文件
     autoSave();
 }
 
 // 绑定页面生命周期事件（确保关闭时保存数据）
 function bindPageLifecycleEvents() {
-    // 页面关闭/刷新前强制保存
+    // 页面关闭/刷新前强制保存（块属性 + 文件双保险）
     window.addEventListener('beforeunload', () => {
         if (!state.widgetID) return;
         try {
+            const cleanedNodes = state.nodes.map(cleanNodeForSave);
+            const cleanedEdges = state.edges.map(cleanEdgeForSave);
             const data = {
                 version: '1.0',
-                nodes: state.nodes,
-                edges: state.edges,
+                nodes: cleanedNodes,
+                edges: cleanedEdges,
                 viewport: state.viewport,
                 settings: {
                     isSnapToGrid: state.isSnapToGrid,
                     isAlignObjects: state.isAlignObjects,
-                    isReadOnly: state.isReadOnly
+                    isReadOnly: state.isReadOnly,
+                    isPreviewMode: state.isPreviewMode
                 }
             };
             const jsonStr = JSON.stringify(data);
+
+            // 1. 文件备份（sendBeacon 最可靠）
             const blob = new Blob([jsonStr], { type: 'application/json' });
             const formData = new FormData();
             formData.append('path', getCanvasFilePath());
             formData.append('file', blob, `${state.widgetID}.canvas`);
-            // sendBeacon 在页面关闭时仍能可靠发送，但需要设置合适的 Content-Type
-            // 对于 FormData，sendBeacon 会自动设置 multipart/form-data
             if (navigator.sendBeacon) {
                 navigator.sendBeacon('/api/file/putFile', formData);
             } else {
-                // fallback: 同步 fetch（部分浏览器支持 keepalive）
                 fetch('/api/file/putFile', { method: 'POST', body: formData, keepalive: true });
             }
+
+            // 2. 块属性保存（keepalive fetch，sendBeacon 不支持 JSON body）
+            fetch('/api/attr/setBlockAttrs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: state.widgetID, attrs: { 'custom-canvas-data': jsonStr } }),
+                keepalive: true
+            }).catch(() => { /* 静默失败 */ });
         } catch (err) {
             console.error('[Canvas] beforeunload 保存失败:', err);
         }
@@ -2921,7 +3333,7 @@ function bindGlobalEvents() {
     tooltipEl.className = 'tooltip';
     document.body.appendChild(tooltipEl);
     let _ttTimer = null;
-    document.querySelectorAll('#toolbar button, #top-toolbar button').forEach(btn => {
+    document.querySelectorAll('#toolbar button, #top-toolbar button, .float-btn').forEach(btn => {
         const text = btn.getAttribute('title');
         if (!text) return;
         btn.removeAttribute('title');
@@ -2935,7 +3347,7 @@ function bindGlobalEvents() {
             const th = tooltipEl.offsetHeight;
             tooltipEl.style.visibility = '';
             const rect = btn.getBoundingClientRect();
-            const isTopBar = btn.closest('#top-toolbar');
+            const isTopBar = btn.closest('#top-toolbar') || btn.matches('.float-btn');
             if (isTopBar) {
                 tooltipEl.style.left = (rect.left - tw - 10) + 'px';
                 tooltipEl.style.top = (rect.top + rect.height / 2 - th / 2) + 'px';
@@ -3091,8 +3503,8 @@ function bindGlobalEvents() {
             e.preventDefault();
             e.stopPropagation();
 
-            // 只读模式：右键卡片/框选框仅显示聚焦，右键空白不弹菜单
-            if (state.isReadOnly) {
+            // 只读/预览模式：右键仅显示聚焦菜单，不显示编辑项
+            if (!isEditingAllowed()) {
                 if (isOnCard || isOnMarquee || inMarqueeRect) {
                     showReadOnlyContextMenu(e.clientX, e.clientY);
                 }
@@ -3125,7 +3537,7 @@ function bindGlobalEvents() {
 
         // 拖拽支持：从工具栏拖出到画布上创建卡片
         btn.addEventListener('dragstart', (e) => {
-            if (state.isReadOnly) { e.preventDefault(); return; }
+            if (!isEditingAllowed()) { e.preventDefault(); return; }
             e.dataTransfer.setData('text/plain', btn.dataset.action);
             e.dataTransfer.effectAllowed = 'copy';
             btn.classList.add('dragging-source');
@@ -3188,19 +3600,35 @@ function bindGlobalEvents() {
     // 触摸设备支持（基础）
     bindTouchEvents(container);
 
-    // 右上角工具栏
+    // 右上角工具栏 + 模式切换按钮：点击不触发画布事件
     const topToolbar = document.getElementById('top-toolbar');
-    // 点击工具栏不触发画布事件
     topToolbar.addEventListener('mousedown', (e) => { e.stopPropagation(); });
     topToolbar.addEventListener('click', (e) => { e.stopPropagation(); });
+
+    // 悬浮按钮：阻止事件冒泡到画布
+    document.querySelectorAll('.float-btn').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+        btn.addEventListener('click', (e) => { e.stopPropagation(); });
+    });
+
+    document.getElementById('btn-toggle-mode').addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePreviewMode();
+    });
+
+    document.getElementById('btn-fit-all-float').addEventListener('click', () => {
+        fitAllNodes();
+    });
+
+    document.getElementById('btn-zoom-reset-float').addEventListener('click', () => {
+        resetView();
+    });
 
     document.getElementById('btn-settings').addEventListener('click', (e) => {
         e.stopPropagation();
         if (state.isReadOnly) {
-            // 只读模式下点击锁 → 退出只读
             toggleReadOnly();
         } else {
-            // 编辑模式下点击齿轮 → 弹出选项面板
             toggleSettingsDropdown();
         }
     });
@@ -3212,12 +3640,6 @@ function bindGlobalEvents() {
         const rect = container.getBoundingClientRect();
         zoom(-CONFIG.ZOOM_STEP, rect.left + rect.width / 2, rect.top + rect.height / 2);
     });
-    document.getElementById('btn-zoom-reset').addEventListener('click', () => {
-        resetView();
-    });
-    document.getElementById('btn-fit-all').addEventListener('click', () => {
-        fitAllNodes();
-    });
     document.getElementById('btn-undo').addEventListener('click', () => {
         undo();
     });
@@ -3226,6 +3648,10 @@ function bindGlobalEvents() {
     });
     document.getElementById('btn-export').addEventListener('click', () => {
         exportAsImage();
+    });
+
+    document.getElementById('btn-export-canvas').addEventListener('click', () => {
+        exportCanvasFile();
     });
 
     updateZoomLabel();
@@ -3449,20 +3875,21 @@ function createToolbarDragImage(action) {
         el.style.height = '64px';
         el.style.background = 'rgba(77,171,247,0.1)';
         el.style.border = '2px dashed #4dabf7';
-        el.style.borderRadius = '8px';
+        el.style.borderRadius = '12px';
     } else {
         el.style.width = '160px';
         el.style.height = '40px';
         el.style.background = '#ffffff';
-        el.style.border = '2px solid #333333';
-        el.style.borderRadius = '6px';
+        el.style.border = '1px solid #d0d0d0';
+        el.style.borderRadius = '12px';
+        el.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
     }
     return el;
 }
 
 // 处理工具栏操作
 function handleToolbarAction(action, e) {
-    if (state.isReadOnly) return;
+    if (!isEditingAllowed()) return;
     switch (action) {
         case 'add-card':
             createNode('text', { text: '' });
@@ -3515,8 +3942,8 @@ function handleKeyboard(e) {
         return;
     }
 
-    // 删除选中项（只读模式禁止）
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !state.isReadOnly) {
+    // 删除选中项（只读/预览模式禁止）
+    if ((e.key === 'Delete' || e.key === 'Backspace') && isEditingAllowed()) {
         e.preventDefault();
         deleteSelectedItems();
     }
@@ -3539,11 +3966,10 @@ function handleKeyboard(e) {
         copySelectedItems();
     }
 
-    // 粘贴（Ctrl+V / Cmd+V）
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    // 粘贴（Ctrl+V / Cmd+V，只读/预览模式禁止）
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v' && isEditingAllowed()) {
         e.preventDefault();
         if (!pasteItems()) {
-            // 内部剪贴板为空，尝试读取系统剪贴板
             pasteExternalText();
         }
     }
@@ -3561,16 +3987,16 @@ function handleKeyboard(e) {
         redo();
     }
 
-    // 复制选中项（Ctrl+D / Cmd+D，只读模式禁止）
-    if ((e.ctrlKey || e.metaKey) && e.key === 'd' && !state.isReadOnly) {
+    // 复制选中项（Ctrl+D / Cmd+D，只读/预览模式禁止）
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd' && isEditingAllowed()) {
         e.preventDefault();
         duplicateSelectedItems();
     }
 
-    // 方向键移动选中节点
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    // 方向键移动选中节点（只读/预览模式禁止）
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && isEditingAllowed()) {
         e.preventDefault();
-        const step = e.shiftKey ? 20 : 5; // Shift+方向键移动更大步长
+        const step = e.shiftKey ? 20 : 5;
         let dx = 0, dy = 0;
 
         switch (e.key) {

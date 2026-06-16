@@ -168,14 +168,15 @@ html, body {
 
 /* ============================================
    卡片样式 — Obsidian Canvas 风格
+   参考: https://github.com/obsidianmd/jsoncanvas
    ============================================ */
 .card {
     position: absolute;
     min-width: 50px;
     min-height: 50px;
     background: var(--color-bg-card);
-    border: 2px solid var(--color-border);
-    border-radius: 8px;
+    border: 1px solid var(--color-border-light);
+    border-radius: 12px;
     cursor: default;
     z-index: 1;
     pointer-events: auto;
@@ -186,15 +187,17 @@ html, body {
     display: flex;
     flex-direction: column;
     overflow: visible;
+    /* Obsidian Canvas 风格阴影 */
+    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
 }
 
 .card:hover {
-    box-shadow: 0 4px 12px var(--color-shadow);
+    border-color: var(--color-border);
 }
 
 .card.selected {
     border-color: var(--color-accent) !important;
-    box-shadow: 0 0 0 3px var(--color-selection);
+    box-shadow: 0 0 0 2px var(--color-selection), 0 5px 15px rgba(0,0,0,0.2);
 }
 
 .card.editing {
@@ -347,20 +350,21 @@ html, body {
 .card[data-color="blue"] { background: #4dabf7; border-color: #1864ab; }
 .card[data-color="purple"] { background: #9775fa; border-color: #6741d9; }
 .card[data-color="gray"] { background: #868e96; border-color: #495057; }
-.card[data-color="white"] { background: #ffffff; border-color: #333333; }
+.card[data-color="white"] { background: #ffffff; border-color: #d0d0d0; }
 
-/* 卡片形状 */
+/* 卡片形状 — Obsidian Canvas 兼容名 */
 .card[data-shape="rect"] { border-radius: 0; }
-.card[data-shape="rounded"] { border-radius: 8px; }
+.card[data-shape="rounded"] { border-radius: 12px; }
+.card[data-shape="rectangle"] { border-radius: 0; }
 .card[data-shape="diamond"] {
     clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
 }
 .card[data-shape="ellipse"] { border-radius: 50%; }
 
-/* 卡片边框 */
+/* 卡片边框样式 */
 .card[data-border="solid"] { border-style: solid; }
 .card[data-border="dashed"] { border-style: dashed; }
-.card[data-border="none"] { border-style: none; }
+.card[data-border="none"] { border-style: none; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
 
 /* 文本对齐 */
 .card[data-align="left"] .card-content { text-align: left; }
@@ -524,8 +528,8 @@ html, body {
 
 .edge-path {
     fill: none;
-    stroke: var(--color-border);
-    stroke-width: 2.5;
+    stroke: #7c7c7c;  /* Obsidian Canvas 默认连线色 */
+    stroke-width: 2;
     cursor: pointer;
     pointer-events: stroke;
     transition: stroke 0.2s, stroke-width 0.2s;
@@ -544,7 +548,7 @@ html, body {
 
 .edge-path:hover {
     stroke: var(--color-accent);
-    stroke-width: 4.5;
+    stroke-width: 4;
 }
 
 .edge-path.selected {
@@ -560,7 +564,7 @@ html, body {
 }
 
 .edge-arrow {
-    fill: var(--color-border);
+    fill: #7c7c7c;  /* 匹配默认连线色 */
 }
 
 .temp-edge {
@@ -1055,11 +1059,48 @@ html, body {
 }
 
 /* ============================================
+   悬浮按钮（始终可见，预览/编辑模式均可操作）
+   ============================================ */
+.float-btn {
+    position: fixed;
+    right: 16px;  /* 与 top-toolbar 内按钮右边缘对齐（12px + 4px padding） */
+    width: 34px;
+    height: 34px;
+    border: none;
+    background: var(--color-bg-primary);
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    box-shadow: 0 2px 12px var(--color-shadow);
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+}
+.float-btn:hover {
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+.float-btn.mode-active {
+    color: var(--color-accent);
+    background: var(--color-selection);
+}
+.float-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+#btn-toggle-mode       { top: 12px; }
+#btn-fit-all-float     { top: 52px; }
+#btn-zoom-reset-float  { top: 92px; }
+
+/* ============================================
    右上角工具栏（竖向）
    ============================================ */
 .top-toolbar {
     position: fixed;
-    top: 12px;
+    top: 134px;  /* 为悬浮按钮组让出空间（3个按钮 × 40px间距） */
     right: 12px;
     display: flex;
     flex-direction: column;
@@ -1193,14 +1234,29 @@ html, body {
 }
 
 /* ============================================
-   工具栏自动隐藏（纯 CSS body:hover）
+   预览/编辑模式 — 工具栏显隐
    ============================================ */
-#toolbar, #top-toolbar {
+/* 预览模式：工具栏隐藏 */
+#canvas-container.preview-mode ~ #toolbar,
+#canvas-container.preview-mode ~ #top-toolbar,
+body.preview-mode #toolbar,
+body.preview-mode #top-toolbar {
     opacity: 0;
-    transition: opacity 0.5s ease;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
 }
-body:hover #toolbar,
-body:hover #top-toolbar {
+
+/* 编辑模式：工具栏可见 */
+body.edit-mode #toolbar,
+body.edit-mode #top-toolbar {
     opacity: 1;
-    transition: opacity 0.1s ease;
+    pointer-events: auto;
+    transition: opacity 0.15s ease;
+}
+
+/* 默认工具栏可见 */
+body #toolbar,
+body #top-toolbar {
+    opacity: 1;
+    pointer-events: auto;
 }
