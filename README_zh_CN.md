@@ -19,6 +19,7 @@
 
 ### 连线
 - **贝塞尔曲线** — 从卡片边缘锚点拖出，创建平滑连线
+- **锚点吸附** — 拖拽连线靠近目标卡片锚点自动吸附，精准连接
 - **箭头标记** — 连线末端显示方向箭头
 - **端点重连** — 拖拽连线端点即可重新连接到其他卡片
 
@@ -30,10 +31,13 @@
 
 ### 选择与编辑
 - **单击**选中，**拖拽**移动，**四角四边**调整大小
+- **对齐辅助线** — 拖拽时自动吸附到其他卡片的边缘和中心，显示品红色对齐线
+- **Option/Alt+拖拽** — 按住 Option（Mac）/ Alt（Win/Linux）拖拽即可复制卡片
+- **Option/Alt+Shift+拖拽** — 复制并锁定水平/垂直轴向平移
 - **框选** — 空白处拖拽框选多张卡片，再拖拽框选框可整体移动
 - **方向键微调** — 方向键（±5px），`Shift+方向键`（±20px）
 - **复制/粘贴**（`Ctrl/Cmd+C/V`），**复制副本**（`Ctrl/Cmd+D`），**删除**（`Backspace`）
-- **撤销/重做**（`Ctrl/Cmd+Z` / `Ctrl/Cmd+Y`）— 50 步，严格逐级
+- **撤销/重做**（`Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z`）— 50 步，严格逐级
 
 ### 设置（关闭重开保持）
 - **对齐网格** — 默认开启，拖拽时自动吸附 20px 网格
@@ -43,7 +47,6 @@
 ### 数据
 - **自动保存** — 操作后 300ms 防抖，通过思源内核 API
 - **设置持久化** — 网格对齐、只读状态保存并在下次打开时恢复
-- **JSON Canvas 格式** — `.canvas` 文件，可与 Obsidian Canvas 互通
 
 ---
 
@@ -68,37 +71,10 @@
 | `Ctrl/Cmd+F` | 搜索卡片 |
 | `Ctrl/Cmd+S` | 强制保存 |
 | `Ctrl/Cmd+E` | 导出 PNG |
+| `Option/Alt+拖拽` | 复制卡片 |
+| `Option/Alt+Shift+拖拽` | 复制 + 轴向锁定 |
 | `方向键` | 微调选中（±5px） |
 | `Shift+方向键` | 微调选中（±20px） |
-
-## 数据格式
-
-```json
-{
-  "version": "1.0",
-  "nodes": [{
-    "id": "abc123",
-    "type": "text",
-    "x": 100, "y": 200,
-    "width": 250, "height": 120,
-    "text": "# 你好\n世界",
-    "color": "blue"
-  }],
-  "edges": [{
-    "id": "edge_xyz",
-    "fromNode": "abc123",
-    "fromSide": "right",
-    "toNode": "def456",
-    "toSide": "left",
-    "toEnd": "arrow"
-  }],
-  "viewport": { "x": 0, "y": 0, "zoom": 1 },
-  "settings": {
-    "isSnapToGrid": true,
-    "isReadOnly": false
-  }
-}
-```
 
 ## 许可证
 

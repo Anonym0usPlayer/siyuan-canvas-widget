@@ -19,6 +19,7 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 
 ### Connections
 - **Bezier curves** — drag from card edge anchors to create smooth connections between cards
+- **Anchor snapping** — drag a connection near a target card's anchor to snap into place
 - **Arrows** — directional arrow markers on connection lines
 - **Reconnect** — drag edge endpoints to reconnect to different cards in real-time
 
@@ -30,10 +31,13 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 
 ### Selection & Editing
 - **Click** to select, **drag** to move, **resize handles** on all four corners and edges
+- **Alignment guides** — snap to other cards' edges and centers, with magenta guide lines during drag
+- **Option/Alt-drag** — duplicate a card by holding Option (Mac) / Alt (Win/Linux) while dragging
+- **Option/Alt+Shift-drag** — duplicate and lock to horizontal/vertical axis
 - **Marquee selection** — drag on empty canvas to select multiple cards, then drag the selection box to move them all at once
 - **Keyboard nudge** — arrow keys (±5px), `Shift+arrow` (±20px)
 - **Copy/Paste** (`Ctrl/Cmd+C/V`), **Duplicate** (`Ctrl/Cmd+D`), **Delete** (`Backspace`)
-- **Undo/Redo** (`Ctrl/Cmd+Z` / `Ctrl/Cmd+Y`) — 50-step history, strict step-by-step
+- **Undo/Redo** (`Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z`) — 50-step history, strict step-by-step
 
 ### Settings (persist across sessions)
 - **Snap to grid** — on by default, aligns nodes to 20px grid during drag
@@ -43,7 +47,6 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 ### Data
 - **Auto-save** — debounced 300ms, via SiYuan Kernel API
 - **Settings persistence** — grid, read-only state saved and restored on reload
-- **JSON Canvas format** — `.canvas` files, interoperable with Obsidian Canvas
 
 ---
 
@@ -68,37 +71,10 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 | `Ctrl/Cmd+F` | Search cards |
 | `Ctrl/Cmd+S` | Force save |
 | `Ctrl/Cmd+E` | Export as PNG |
+| `Option/Alt+Drag` | Duplicate card |
+| `Option/Alt+Shift+Drag` | Duplicate + axis lock |
 | `Arrow Keys` | Nudge selected (±5px) |
 | `Shift+Arrow` | Nudge selected (±20px) |
-
-## Data Format
-
-```json
-{
-  "version": "1.0",
-  "nodes": [{
-    "id": "abc123",
-    "type": "text",
-    "x": 100, "y": 200,
-    "width": 250, "height": 120,
-    "text": "# Hello\nWorld",
-    "color": "blue"
-  }],
-  "edges": [{
-    "id": "edge_xyz",
-    "fromNode": "abc123",
-    "fromSide": "right",
-    "toNode": "def456",
-    "toSide": "left",
-    "toEnd": "arrow"
-  }],
-  "viewport": { "x": 0, "y": 0, "zoom": 1 },
-  "settings": {
-    "isSnapToGrid": true,
-    "isReadOnly": false
-  }
-}
-```
 
 ## License
 

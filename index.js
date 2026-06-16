@@ -723,6 +723,11 @@ function clearSelection() {
         if (el) el.classList.remove('selected');
     });
     state.selectedEdges.clear();
+
+    // 防御性清理：确保残留的临时高亮也被移除
+    document.querySelectorAll('.card.marquee-hover').forEach(el => {
+        el.classList.remove('marquee-hover');
+    });
 }
 
 // 绑定节点事件
@@ -906,21 +911,178 @@ function startEditingNode(nodeId) {
     textarea.addEventListener('keydown', handleKeyDown);
 }
 
+// ============================================
+//  对齐辅助系统
+// ============================================
+
+const ALIGN_THRESHOLD = 5; // 对齐阈值（画布像素，在 100% 缩放约 5px）
+
+// 计算拖拽矩形与画布上其他节点的对齐线
+function computeAlignments(draggedRect, excludeNodeIds) {
+    const aligns = [];
+    const threshold = ALIGN_THRESHOLD / state.viewport.zoom;
+
+    const d = {
+        left: draggedRect.x,
+        right: draggedRect.x + draggedRect.width,
+        centerX: draggedRect.x + draggedRect.width / 2,
+        top: draggedRect.y,
+        bottom: draggedRect.y + draggedRect.height,
+        centerY: draggedRect.y + draggedRect.height / 2
+    };
+
+    for (const node of state.nodes) {
+        if (excludeNodeIds.has(node.id)) continue;
+
+        const o = {
+            left: node.x,
+            right: node.x + node.width,
+            centerX: node.x + node.width / 2,
+            top: node.y,
+            bottom: node.y + node.height,
+            centerY: node.y + node.height / 2
+        };
+
+        // 垂直对齐检查 (x = constant): left, right, centerX
+        const vChecks = [
+            { type: 'left', dVal: d.left, oVal: o.left },
+            { type: 'right', dVal: d.right, oVal: o.right },
+            { type: 'centerX', dVal: d.centerX, oVal: o.centerX }
+        ];
+        for (const { type, dVal, oVal } of vChecks) {
+            if (Math.abs(dVal - oVal) < threshold) {
+                aligns.push({
+                    type,
+                    orientation: 'vertical',
+                    value: oVal,
+                    start: Math.min(d.top, o.top),
+                    end: Math.max(d.bottom, o.bottom),
+                    distance: Math.abs(dVal - oVal)
+                });
+            }
+        }
+
+        // 水平对齐检查 (y = constant): top, bottom, centerY
+        const hChecks = [
+            { type: 'top', dVal: d.top, oVal: o.top },
+            { type: 'bottom', dVal: d.bottom, oVal: o.bottom },
+            { type: 'centerY', dVal: d.centerY, oVal: o.centerY }
+        ];
+        for (const { type, dVal, oVal } of hChecks) {
+            if (Math.abs(dVal - oVal) < threshold) {
+                aligns.push({
+                    type,
+                    orientation: 'horizontal',
+                    value: oVal,
+                    start: Math.min(d.left, o.left),
+                    end: Math.max(d.right, o.right),
+                    distance: Math.abs(dVal - oVal)
+                });
+            }
+        }
+    }
+
+    return aligns;
+}
+
+// 渲染对齐辅助线
+function renderAlignGuides(aligns) {
+    const layer = document.getElementById('align-guides-layer');
+    if (!layer) return;
+    layer.innerHTML = '';
+
+    for (const a of aligns) {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        if (a.orientation === 'vertical') {
+            line.setAttribute('x1', String(a.value));
+            line.setAttribute('y1', String(a.start));
+            line.setAttribute('x2', String(a.value));
+            line.setAttribute('y2', String(a.end));
+        } else {
+            line.setAttribute('x1', String(a.start));
+            line.setAttribute('y1', String(a.value));
+            line.setAttribute('x2', String(a.end));
+            line.setAttribute('y2', String(a.value));
+        }
+        line.setAttribute('class', 'align-guide-line');
+        layer.appendChild(line);
+    }
+}
+
+// 清除对齐辅助线
+function clearAlignGuides() {
+    const layer = document.getElementById('align-guides-layer');
+    if (layer) layer.innerHTML = '';
+}
+
+// 从对齐结果中应用吸附（每轴只取最近的对齐）
+function applyAlignSnap(aligns, draggedRect) {
+    let snapX = null, snapY = null;
+    let minDistX = Infinity, minDistY = Infinity;
+
+    for (const a of aligns) {
+        if (a.orientation === 'vertical' && a.distance < minDistX) {
+            minDistX = a.distance;
+            switch (a.type) {
+                case 'left':   snapX = a.value; break;
+                case 'right':  snapX = a.value - draggedRect.width; break;
+                case 'centerX': snapX = a.value - draggedRect.width / 2; break;
+            }
+        }
+        if (a.orientation === 'horizontal' && a.distance < minDistY) {
+            minDistY = a.distance;
+            switch (a.type) {
+                case 'top':    snapY = a.value; break;
+                case 'bottom': snapY = a.value - draggedRect.height; break;
+                case 'centerY': snapY = a.value - draggedRect.height / 2; break;
+            }
+        }
+    }
+
+    return { x: snapX, y: snapY };
+}
+
 // 开始拖拽节点
 function startDraggingNode(nodeId, e) {
     if (state.isReadOnly) return;
+    let dragNodeId = nodeId;
+
+    // Option/Alt + 拖拽：复制一份卡片并拖拽副本
+    if (e.altKey) {
+        const node = state.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+
+        // 深拷贝节点数据（排除 id 和 edges）
+        const cloneData = {};
+        for (const key of Object.keys(node)) {
+            if (key !== 'id' && key !== 'edges') {
+                cloneData[key] = node[key];
+            }
+        }
+        const newNode = createNode(cloneData.type || 'text', {
+            ...cloneData,
+            autoEdit: false  // 复制时不自动进入编辑模式
+        });
+
+        // 取消原节点选中，选中新节点
+        clearSelection();
+        selectNode(newNode.id, false);
+        dragNodeId = newNode.id;
+        state._isAltDuplicate = true;
+    }
+
     state.isDragging = true;
     state._dragActuallyMoved = false;  // 追踪是否真正移动
-    const node = state.nodes.find(n => n.id === nodeId);
+    const node = state.nodes.find(n => n.id === dragNodeId);
     if (!node) { state.isDragging = false; return; }
 
     // 添加拖拽视觉状态
-    const card = document.querySelector(`[data-node-id="${nodeId}"]`);
+    const card = document.querySelector(`[data-node-id="${dragNodeId}"]`);
     if (card) card.classList.add('is-dragging');
 
     const startPos = screenToCanvas(e.clientX, e.clientY);
     state.dragStartPos = {
-        nodeId: nodeId,
+        nodeId: dragNodeId,
         startX: node.x,
         startY: node.y,
         offsetX: startPos.x - node.x,
@@ -941,11 +1103,45 @@ function onDraggingNode(e) {
     let newX = pos.x - state.dragStartPos.offsetX;
     let newY = pos.y - state.dragStartPos.offsetY;
 
+    // Option/Alt + Shift：锁定轴向平移（沿主轴方向移动）
+    if (e.altKey && e.shiftKey) {
+        const dx = newX - state.dragStartPos.startX;
+        const dy = newY - state.dragStartPos.startY;
+        if (Math.abs(dx) > Math.abs(dy)) {
+            newY = state.dragStartPos.startY;  // 锁定水平移动
+        } else {
+            newX = state.dragStartPos.startX;  // 锁定垂直移动
+        }
+    }
+
     // 对齐网格：拖拽过程中约束到网格
     if (state.isSnapToGrid) {
         const gridSize = CONFIG.GRID_SIZE;
         newX = Math.round(newX / gridSize) * gridSize;
         newY = Math.round(newY / gridSize) * gridSize;
+    }
+
+    // 获取被拖拽节点的宽高
+    const node = state.nodes.find(n => n.id === state.dragStartPos.nodeId);
+    if (node) {
+        const draggedRect = { x: newX, y: newY, width: node.width, height: node.height };
+        const excludeIds = new Set([state.dragStartPos.nodeId]);
+        const aligns = computeAlignments(draggedRect, excludeIds);
+
+        // 吸附到对齐线（对齐优先于网格）
+        const snap = applyAlignSnap(aligns, draggedRect);
+        if (snap.x !== null) newX = snap.x;
+        if (snap.y !== null) newY = snap.y;
+
+        // 渲染对齐辅助线
+        if (aligns.length > 0) {
+            // 重新计算吸附后的对齐线（确保线条位置准确）
+            const snappedRect = { x: newX, y: newY, width: node.width, height: node.height };
+            const finalAligns = computeAlignments(snappedRect, excludeIds);
+            renderAlignGuides(finalAligns);
+        } else {
+            clearAlignGuides();
+        }
     }
 
     updateNode(state.dragStartPos.nodeId, { x: newX, y: newY });
@@ -967,8 +1163,10 @@ function stopDraggingNode() {
     state.isDragging = false;
     state.dragStartPos = null;
     state._dragActuallyMoved = false;
+    state._isAltDuplicate = false;
     document.removeEventListener('mousemove', onDraggingNode);
     document.removeEventListener('mouseup', stopDraggingNode);
+    clearAlignGuides();
     autoSave(); // 拖拽结束后统一保存
 }
 
@@ -976,6 +1174,56 @@ function stopDraggingNode() {
 let _marqueeDragData = null;
 function startMarqueeDrag(e) {
     if (state.isReadOnly) return;
+
+    // Option/Alt + 拖拽框选：复制所有选中节点并拖拽副本
+    if (e.altKey) {
+        beginBatchHistory();
+
+        // 克隆所有选中节点
+        const idMap = new Map(); // oldId -> newId
+        const newNodeIds = [];
+        for (const oldId of state.selectedNodes) {
+            const oldNode = state.nodes.find(n => n.id === oldId);
+            if (!oldNode) continue;
+            const cloneData = {};
+            for (const key of Object.keys(oldNode)) {
+                if (key !== 'id' && key !== 'edges') {
+                    cloneData[key] = oldNode[key];
+                }
+            }
+            const newNode = createNode(cloneData.type || 'text', {
+                ...cloneData,
+                autoEdit: false
+            });
+            idMap.set(oldId, newNode.id);
+            newNodeIds.push(newNode.id);
+        }
+
+        // 克隆选中节点之间的内部连线
+        const oldSelected = new Set(state.selectedNodes);
+        for (const edge of state.edges) {
+            if (oldSelected.has(edge.fromNode) && oldSelected.has(edge.toNode)) {
+                const newFromId = idMap.get(edge.fromNode);
+                const newToId = idMap.get(edge.toNode);
+                if (newFromId && newToId) {
+                    createEdge(newFromId, newToId, edge.fromSide, edge.toSide, {
+                        fromEnd: edge.fromEnd,
+                        toEnd: edge.toEnd,
+                        label: edge.label,
+                        color: edge.color
+                    });
+                }
+            }
+        }
+
+        endBatchHistory();
+
+        // 切换选中到新节点
+        clearSelection();
+        newNodeIds.forEach(id => selectNode(id, true));
+        state._isAltDuplicate = true;
+    }
+
     state.isDragging = true;
     state._dragActuallyMoved = false;
 
@@ -998,22 +1246,67 @@ function onMarqueeDrag(e) {
 
     state._dragActuallyMoved = true;
     const pos = screenToCanvas(e.clientX, e.clientY);
-    const dx = pos.x - _marqueeDragData.startX;
-    const dy = pos.y - _marqueeDragData.startY;
+    let dx = pos.x - _marqueeDragData.startX;
+    let dy = pos.y - _marqueeDragData.startY;
+
+    // Option/Alt + Shift：锁定轴向平移
+    if (e.altKey && e.shiftKey) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+            dy = 0;  // 锁定水平移动
+        } else {
+            dx = 0;  // 锁定垂直移动
+        }
+    }
+
+    // 对齐网格
+    if (state.isSnapToGrid) {
+        const gridSize = CONFIG.GRID_SIZE;
+        dx = Math.round(dx / gridSize) * gridSize;
+        dy = Math.round(dy / gridSize) * gridSize;
+    }
+
+    // 计算选中节点组的包围盒（应用偏移后）
+    const selectedIds = new Set(state.selectedNodes);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const np of _marqueeDragData.nodePositions) {
+        const node = state.nodes.find(n => n.id === np.id);
+        if (!node) continue;
+        const nx = np.x + dx;
+        const ny = np.y + dy;
+        minX = Math.min(minX, nx);
+        minY = Math.min(minY, ny);
+        maxX = Math.max(maxX, nx + node.width);
+        maxY = Math.max(maxY, ny + node.height);
+    }
+
+    if (minX < Infinity) {
+        const draggedRect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const aligns = computeAlignments(draggedRect, selectedIds);
+
+        // 吸附
+        const snap = applyAlignSnap(aligns, draggedRect);
+        if (snap.x !== null) dx += snap.x - draggedRect.x;
+        if (snap.y !== null) dy += snap.y - draggedRect.y;
+
+        // 渲染对齐线
+        if (aligns.length > 0) {
+            const snappedRect = { x: minX + (snap.x !== null ? snap.x - draggedRect.x : 0),
+                                 y: minY + (snap.y !== null ? snap.y - draggedRect.y : 0),
+                                 width: draggedRect.width, height: draggedRect.height };
+            const finalAligns = computeAlignments(snappedRect, selectedIds);
+            renderAlignGuides(finalAligns);
+        } else {
+            clearAlignGuides();
+        }
+    }
 
     _marqueeDragData.nodePositions.forEach(np => {
         const node = state.nodes.find(n => n.id === np.id);
         if (!node) return;
-        let newX = np.x + dx;
-        let newY = np.y + dy;
-        if (state.isSnapToGrid) {
-            newX = Math.round(newX / CONFIG.GRID_SIZE) * CONFIG.GRID_SIZE;
-            newY = Math.round(newY / CONFIG.GRID_SIZE) * CONFIG.GRID_SIZE;
-        }
-        node.x = newX;
-        node.y = newY;
+        node.x = np.x + dx;
+        node.y = np.y + dy;
         const card = document.querySelector(`[data-node-id="${np.id}"]`);
-        if (card) { card.style.left = newX + 'px'; card.style.top = newY + 'px'; }
+        if (card) { card.style.left = node.x + 'px'; card.style.top = node.y + 'px'; }
         updateEdgesForNode(np.id);
     });
     // 实时更新框选框位置
@@ -1053,8 +1346,10 @@ function stopMarqueeDrag() {
     state.isDragging = false;
     _marqueeDragData = null;
     state._dragActuallyMoved = false;
+    state._isAltDuplicate = false;
     document.removeEventListener('mousemove', onMarqueeDrag);
     document.removeEventListener('mouseup', stopMarqueeDrag);
+    clearAlignGuides();
     autoSave();
 }
 
@@ -1769,17 +2064,45 @@ function startEdgeDrag(fromNodeId, fromSide, e) {
 function onEdgeDrag(e) {
     if (!state.isDrawingEdge || !tempEdgeData) return;
 
-    const pos = screenToCanvas(e.clientX, e.clientY);
+    let pos = screenToCanvas(e.clientX, e.clientY);
+
+    // 吸附到附近节点的锚点
+    const SNAP_DISTANCE = 25;
+    let snappedNode = null;
+    let snappedSide = null;
+    let minDist = SNAP_DISTANCE;
+
+    for (const node of state.nodes) {
+        if (node.id === tempEdgeData.fromNode) continue;
+        const sides = ['top', 'right', 'bottom', 'left'];
+        for (const side of sides) {
+            const anchorPos = getAnchorPosition(node, side);
+            const dist = Math.hypot(pos.x - anchorPos.x, pos.y - anchorPos.y);
+            if (dist < minDist) {
+                minDist = dist;
+                snappedNode = node;
+                snappedSide = side;
+            }
+        }
+    }
+
+    if (snappedNode) {
+        const anchorPos = getAnchorPosition(snappedNode, snappedSide);
+        pos = anchorPos;
+    }
+
     tempEdgeData.currentX = pos.x;
     tempEdgeData.currentY = pos.y;
 
     const path = document.getElementById('temp-edge-path');
     if (!path) return;
 
-    const oppositeSide = {
-        'top': 'bottom', 'bottom': 'top',
-        'left': 'right', 'right': 'left'
-    }[tempEdgeData.fromSide] || 'left';
+    const oppositeSide = (snappedNode)
+        ? snappedSide
+        : {
+            'top': 'bottom', 'bottom': 'top',
+            'left': 'right', 'right': 'left'
+        }[tempEdgeData.fromSide] || 'left';
 
     const dx = tempEdgeData.currentX - tempEdgeData.startX;
     const dy = tempEdgeData.currentY - tempEdgeData.startY;
@@ -1826,24 +2149,17 @@ function endEdgeDrag(e) {
             // fromSide 保持不变
             const fromSide = tempEdgeData.fromSide;
 
-            // toSide 根据拖拽方向和目标节点的位置确定
-            // 计算目标节点的中心点
-            const targetCenterX = targetNode.x + targetNode.width / 2;
-            const targetCenterY = targetNode.y + targetNode.height / 2;
-            const fromCenterX = fromNode.x + fromNode.width / 2;
-            const fromCenterY = fromNode.y + fromNode.height / 2;
-
-            // 根据起点和终点的相对位置确定 toSide
-            const dx = targetCenterX - fromCenterX;
-            const dy = targetCenterY - fromCenterY;
-
-            let toSide;
-            if (Math.abs(dx) > Math.abs(dy)) {
-                // 水平方向为主
-                toSide = dx > 0 ? 'left' : 'right';
-            } else {
-                // 垂直方向为主
-                toSide = dy > 0 ? 'top' : 'bottom';
+            // toSide：找到目标节点上离释放位置最近的锚点
+            const toSides = ['top', 'right', 'bottom', 'left'];
+            let toSide = 'left';
+            let minDist = Infinity;
+            for (const side of toSides) {
+                const anchorPos = getAnchorPosition(targetNode, side);
+                const dist = Math.hypot(pos.x - anchorPos.x, pos.y - anchorPos.y);
+                if (dist < minDist) {
+                    minDist = dist;
+                    toSide = side;
+                }
             }
 
             createEdge(tempEdgeData.fromNode, targetNode.id, fromSide, toSide);
@@ -1897,11 +2213,12 @@ function endEdgeDrag(e) {
     }
 }
 
-// 查找位置上的节点
+// 查找位置上的节点（带容差，涵盖锚点位置）
+const HIT_TOLERANCE = 20; // 锚点圆心在卡片边界外 8px，加上半径 8px
 function findNodeAtPosition(x, y) {
     return state.nodes.find(node => {
-        return x >= node.x && x <= node.x + node.width &&
-               y >= node.y && y <= node.y + node.height;
+        return x >= node.x - HIT_TOLERANCE && x <= node.x + node.width + HIT_TOLERANCE &&
+               y >= node.y - HIT_TOLERANCE && y <= node.y + node.height + HIT_TOLERANCE;
     });
 }
 
@@ -2975,6 +3292,10 @@ function endMarqueeSelection(e) {
         const height = Math.abs(canvasPos.y - state.marqueeStartPos.y);
 
         if (width < 5 && height < 5) {
+            // 清理所有临时高亮（框选太小但 highlightNodesInMarquee 可能已添加 marquee-hover）
+            document.querySelectorAll('.card.marquee-hover').forEach(el => {
+                el.classList.remove('marquee-hover');
+            });
             clearSelection();
             marquee.remove();
             state._marqueeRect = null;
@@ -3234,7 +3555,8 @@ function handleKeyboard(e) {
     }
 
     // 重做（Ctrl+Y / Cmd+Y 或 Ctrl+Shift+Z / Cmd+Shift+Z）
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    // 注：Shift 会使 e.key 变为大写 'Z'，需同时匹配大小写
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))) {
         e.preventDefault();
         redo();
     }

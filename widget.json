@@ -2,7 +2,7 @@
   "name": "siyuan-canvas-widget",
   "author": "Anonym0usPlayer",
   "url": "https://github.com/Anonym0usPlayer/siyuan-canvas-widget",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "minAppVersion": "3.0.0",
   "backends": ["windows", "linux", "darwin", "docker", "ios", "android"],
   "frontends": ["desktop", "mobile"],
