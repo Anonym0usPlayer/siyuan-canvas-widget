@@ -12,7 +12,7 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 
 ### Obsidian Compatibility
 - **JSON Canvas format** — data saved in Obsidian-compatible format (hex colors, standard fields)
-- **Export .canvas file** — one-click export to `data/assets/CanvasFiles/`; automatically registered as a referenced asset
+- **Export .canvas file** — one-click export to widget `data/` directory for backup/sharing
 - **Cross-app viewing** — exported `.canvas` files open correctly in Obsidian with proper card borders and edge colors
 
 ### Preview & Edit Modes
@@ -57,9 +57,9 @@ A visual canvas widget for [SiYuan Note](https://b3log.org/siyuan/), inspired by
 
 ### Storage — No Orphaned Files
 - **Primary**: block attribute `custom-canvas-data` — data lives and dies with the widget block
-- **Backup**: `data/widgets/siyuan-canvas-widget/data/<blockID>.canvas` — organized in `data/` subdirectory
+- **File copy**: `/data/assets/CanvasFiles/<blockID>.canvas` — visible in SiYuan file tree, auto-registered as referenced asset
 - **Auto-save** — debounced 300ms, both block attribute and file on every change
-- **Automatic migration** — old data from `/data/assets/CanvasFiles/` or flat widget directory migrates on load
+- **Automatic migration** — old data from widget directory migrates on load
 
 ---
 

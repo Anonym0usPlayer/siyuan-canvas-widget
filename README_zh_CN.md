@@ -12,7 +12,7 @@
 
 ### Obsidian 兼容
 - **JSON Canvas 格式** — 数据以 Obsidian 兼容格式保存（hex 颜色，标准字段）
-- **导出 .canvas 文件** — 一键导出到 `data/assets/CanvasFiles/`，自动注册为引用资源
+- **导出 .canvas 文件** — 一键导出到 widget `data/` 目录，用于备份/分享
 - **跨应用查看** — 导出的 `.canvas` 文件可在 Obsidian 中正确打开，卡片带边框、连线颜色匹配
 
 ### 预览与编辑模式
@@ -57,9 +57,9 @@
 
 ### 存储 — 无文件残留
 - **主存储**: 块属性 `custom-canvas-data` — 数据随挂件块生灭，删块即清
-- **文件备份**: `data/widgets/siyuan-canvas-widget/data/<块ID>.canvas` — 集中存放在 `data/` 子目录
+- **文件副本**: `/data/assets/CanvasFiles/<块ID>.canvas` — 思源文件树可见，自动注册引用
 - **自动保存** — 操作后 300ms 防抖，每次保存同时写入块属性和文件
-- **自动迁移** — 旧路径数据（`/data/assets/` 或 widget 扁平目录）加载时自动迁移
+- **自动迁移** — 旧 widget 目录数据加载时自动迁移
 
 ---
 

@@ -314,36 +314,39 @@ function getWidgetID() {
     }
 }
 
-// 获取画布文件路径（widget 数据目录下的 data/ 子目录，结构清晰，不会被思源标记为「未引用资源」）
-const WIDGET_DATA_DIR = '/data/widgets/siyuan-canvas-widget/data/';
+// 自动保存路径：/data/assets/CanvasFiles/（思源文件树可见，通过 custom-data-assets 注册引用避免误清理）
+const ASSETS_CANVAS_DIR = '/data/assets/CanvasFiles/';
 
 function getCanvasFilePath() {
-    return `${WIDGET_DATA_DIR}${state.widgetID}.canvas`;
+    return `${ASSETS_CANVAS_DIR}${state.widgetID}.canvas`;
 }
 
-// 旧存储路径（v1.2.x 之前），用于数据迁移
-const LEGACY_CANVAS_DIR = '/data/assets/CanvasFiles/';
-function getLegacyCanvasFilePath() {
-    return `${LEGACY_CANVAS_DIR}${state.widgetID}.canvas`;
+// 导出路径：widget data/ 子目录（私有，不参与思源资源扫描）
+const WIDGET_DATA_DIR = '/data/widgets/siyuan-canvas-widget/data/';
+
+function getExportFilePath(name) {
+    return `${WIDGET_DATA_DIR}${name}.canvas`;
 }
 
-// 旧 widget 扁平路径（整合到 data/ 之前），用于迁移
-const LEGACY_FLAT_WIDGET_DIR = '/data/widgets/siyuan-canvas-widget/';
-function getLegacyFlatWidgetFilePath() {
-    return `${LEGACY_FLAT_WIDGET_DIR}${state.widgetID}.canvas`;
-}
-
-// 确保 data/ 子目录存在（只执行一次）
+// 确保目录存在
 let _dataDirEnsured = false;
 function ensureDataDir() {
     if (_dataDirEnsured) return;
     _dataDirEnsured = true;
+    // assets 目录（自动保存用）
     try {
-        const formData = new FormData();
-        formData.append('path', '/data/widgets/siyuan-canvas-widget/data/');
-        formData.append('isDir', 'true');
-        fetch('/api/file/putFile', { method: 'POST', body: formData }).catch(() => {});
-    } catch (_) { /* 目录可能已存在 */ }
+        const fd = new FormData();
+        fd.append('path', ASSETS_CANVAS_DIR);
+        fd.append('isDir', 'true');
+        fetch('/api/file/putFile', { method: 'POST', body: fd }).catch(() => {});
+    } catch (_) {}
+    // widget data/ 目录（导出用）
+    try {
+        const fd = new FormData();
+        fd.append('path', WIDGET_DATA_DIR);
+        fd.append('isDir', 'true');
+        fetch('/api/file/putFile', { method: 'POST', body: fd }).catch(() => {});
+    } catch (_) {}
 }
 
 // 保存画布数据（每次调用立即写入磁盘）
@@ -371,41 +374,59 @@ async function saveCanvas() {
         };
         const jsonStr = JSON.stringify(data);
 
-        // 1. 主存储：块属性（数据随块生灭，块删则数据删，不残留文件）
+        // 1. 主存储：块属性（数据随块生灭，块删则数据删）
         await saveCanvasToAttr(jsonStr);
 
-        // 2. 文件备份：写入 widget data/ 子目录
+        // 2. 文件副本：写入 /data/assets/CanvasFiles/（思源文件树可见）
         ensureDataDir();
+        const canvasPath = getCanvasFilePath();
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const formData = new FormData();
-        formData.append('path', getCanvasFilePath());
+        formData.append('path', canvasPath);
         formData.append('file', blob, `${state.widgetID}.canvas`);
         const res = await fetch('/api/file/putFile', { method: 'POST', body: formData });
         const result = await res.json();
         if (result.code !== 0) {
-            console.error('[Canvas] 文件备份失败:', result.code, result.msg);
+            console.error('[Canvas] 文件保存失败:', result.code, result.msg);
         }
 
-        // 迁移：清理旧路径残留文件
-        if (!_legacyCleanedUp) {
-            _legacyCleanedUp = true;
-            const rm = (path) => fetch('/api/file/removeFile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path })
-            }).catch(() => {});
-            // 清理 /data/assets/CanvasFiles/（v1.2.0 之前）
-            rm(getLegacyCanvasFilePath());
-            // 清理 /data/widgets/siyuan-canvas-widget/（整合到 data/ 之前）
-            rm(getLegacyFlatWidgetFilePath());
-        }
+        // 3. 注册资源引用（避免被思源标记为"未引用资源"）
+        await registerAssetRef(canvasPath);
     } catch (err) {
         console.error('[Canvas] 保存异常:', err);
     }
 }
 
-// 旧文件清理标记（只执行一次）
-let _legacyCleanedUp = false;
+/**
+ * 注册 canvas 文件为块引用资源，避免被思源标记为"未引用资源"
+ */
+async function registerAssetRef(canvasPath) {
+    try {
+        const res = await fetch('/api/attr/getBlockAttrs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: state.widgetID })
+        });
+        const result = await res.json();
+        let existing = '';
+        if (result.code === 0 && result.data) {
+            existing = result.data['custom-data-assets'] || '';
+        }
+        // 去重：不重复添加同一路径
+        const paths = existing ? existing.split('\n').map(s => s.trim()).filter(Boolean) : [];
+        if (!paths.includes(canvasPath)) {
+            paths.push(canvasPath);
+            await fetch('/api/attr/setBlockAttrs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: state.widgetID,
+                    attrs: { 'custom-data-assets': paths.join('\n') }
+                })
+            });
+        }
+    } catch (_) { /* 注册失败不阻塞保存 */ }
+}
 
 // ============================================
 // 2.5 块属性存储（主存储：数据随块生灭，块删则数据删）
@@ -507,49 +528,26 @@ async function _readCanvasFile(path) {
     }
 }
 
-// 加载画布数据（块属性优先 → 文件备选 → 旧路径迁移）
+// 加载画布数据（块属性优先 → 文件备选）
 async function loadCanvas() {
     if (!state.widgetID) return false;
     try {
         let data = null;
         let needSave = false;
 
-        // 1. 优先从块属性加载（主存储，无文件残留）
+        // 1. 优先从块属性加载（主存储）
         data = await loadCanvasFromAttr();
-        if (data) {
-            console.log('[Canvas] 从块属性加载');
-        }
 
-        // 2. 块属性无数据 → 尝试 widget data/ 子目录
+        // 2. 块属性无数据 → 尝试文件加载
         if (!data) {
             data = await _readCanvasFile(getCanvasFilePath());
-            if (data) {
-                console.log('[Canvas] 从 widget data/ 加载，回存块属性');
-                needSave = true;
-            }
-        }
-
-        // 3. 尝试旧路径迁移（widget 扁平目录 → /data/assets/）
-        if (!data) {
-            data = await _readCanvasFile(getLegacyFlatWidgetFilePath());
-            if (data) {
-                console.log('[Canvas] 从 widget 扁平目录迁移');
-                needSave = true;
-            } else {
-                data = await _readCanvasFile(getLegacyCanvasFilePath());
-                if (data) {
-                    console.log('[Canvas] 从旧 /data/assets/ 路径迁移');
-                    needSave = true;
-                }
-            }
+            if (data) needSave = true;
         }
 
         if (data && data.nodes) {
-            // 规范化节点数据（兼容 Obsidian JSON Canvas 格式）
             state.nodes = (data.nodes || []).map(normalizeNodeFromLoad);
             state.edges = data.edges || [];
             state.viewport = data.viewport || { x: 0, y: 0, zoom: 1 };
-            // 恢复设置
             if (data.settings) {
                 state.isSnapToGrid = data.settings.isSnapToGrid ?? true;
                 state.isAlignObjects = data.settings.isAlignObjects ?? false;
@@ -557,11 +555,7 @@ async function loadCanvas() {
                 state.isPreviewMode = data.settings.isPreviewMode ?? true;
             }
 
-            // 数据来自文件时，回存到块属性（完成迁移）
-            if (needSave) {
-                await saveCanvas();
-            }
-
+            if (needSave) await saveCanvas();
             return true;
         }
     } catch (err) {
@@ -3062,8 +3056,7 @@ function fitAllNodes() {
 }
 
 /**
- * 导出 .canvas 文件到 /data/assets/CanvasFiles/
- * 并通过 custom-data-assets 属性注册引用，避免被思源标记为"未引用资源"
+ * 导出 .canvas 文件到 widget data/ 目录（私有快照，不参与思源资源扫描）
  */
 async function exportCanvasFile() {
     if (!state.widgetID) return;
@@ -3072,7 +3065,6 @@ async function exportCanvasFile() {
         return;
     }
     try {
-        // 清洗数据
         const cleanedNodes = state.nodes.map(cleanNodeForSave);
         const cleanedEdges = state.edges.map(cleanEdgeForSave);
         const data = {
@@ -3090,17 +3082,9 @@ async function exportCanvasFile() {
         const jsonStr = JSON.stringify(data);
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const safeName = `canvas-${timestamp}`;
-        const exportPath = `/data/assets/CanvasFiles/${safeName}.canvas`;
+        const exportPath = getExportFilePath(safeName);
 
-        // 确保目录存在
-        try {
-            const dirFd = new FormData();
-            dirFd.append('path', '/data/assets/CanvasFiles/');
-            dirFd.append('isDir', 'true');
-            await fetch('/api/file/putFile', { method: 'POST', body: dirFd });
-        } catch (_) { /* 目录可能已存在 */ }
-
-        // 写入 .canvas 文件
+        ensureDataDir();
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const formData = new FormData();
         formData.append('path', exportPath);
@@ -3112,34 +3096,9 @@ async function exportCanvasFile() {
             return;
         }
 
-        // 注册资源引用（避免被标记为"未引用资源"）
-        try {
-            const existingAttrsRes = await fetch('/api/attr/getBlockAttrs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: state.widgetID })
-            });
-            const existingAttrs = await existingAttrsRes.json();
-            let existingAssets = '';
-            if (existingAttrs.code === 0 && existingAttrs.data) {
-                existingAssets = existingAttrs.data['custom-data-assets'] || '';
-            }
-            const newAssets = existingAssets
-                ? existingAssets + '\n' + exportPath
-                : exportPath;
-            await fetch('/api/attr/setBlockAttrs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    id: state.widgetID,
-                    attrs: { 'custom-data-assets': newAssets }
-                })
-            });
-        } catch (_) { /* 引用注册失败不阻塞导出 */ }
-
         showMessage(`已导出: ${exportPath}`);
     } catch (err) {
-        console.error('[Canvas] 导出 .canvas 异常:', err);
+        console.error('[Canvas] 导出异常:', err);
         showMessage('导出失败');
     }
 }
